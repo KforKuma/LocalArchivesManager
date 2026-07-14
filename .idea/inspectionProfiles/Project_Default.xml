@@ -1,0 +1,30 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="false" level="WARNING" enabled_by_default="false">
+      <option name="ignoredPackages">
+        <list>
+          <option value="anndata" />
+          <option value="scanpy" />
+          <option value="scvi-tools" />
+          <option value="scirpy" />
+          <option value="python-circos" />
+          <option value="pingouin" />
+          <option value="statannotations" />
+          <option value="plotnine" />
+          <option value="ktplotspy" />
+          <option value="igraph" />
+          <option value="leidenalg" />
+          <option value="matplotlib" />
+          <option value="seaborn" />
+          <option value="pandas" />
+          <option value="numpy" />
+          <option value="scikit-learn" />
+          <option value="tqdm" />
+          <option value="adjustText" />
+          <option value="xlsxwriter" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
