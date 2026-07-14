@@ -10,6 +10,11 @@ PMID_PATTERN = re.compile(
     r"\b(?:pubmed\s+)?pmid\s*[:#]?\s*(\d{5,9})\b",
     re.I,
 )
+ARXIV_PATTERN = re.compile(
+    r"^(?:arxiv:)?(?P<base>(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7}))"
+    r"(?P<version>v\d+)?$",
+    re.I,
+)
 
 
 def normalize_doi(value: object) -> str:
@@ -27,6 +32,18 @@ def normalize_pmid(value: object) -> str:
     if labelled:
         return labelled.group(1)
     return text if re.fullmatch(r"\d{5,9}", text) else ""
+
+
+def normalize_arxiv_id(value: object, *, keep_version: bool = False) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^https?://arxiv\.org/(?:abs|pdf)/", "", text, flags=re.I)
+    text = re.sub(r"\.pdf$", "", text, flags=re.I)
+    match = ARXIV_PATTERN.fullmatch(text)
+    if not match:
+        return ""
+    base = match.group("base")
+    version = match.group("version") or ""
+    return f"{base}{version if keep_version else ''}"
 
 
 def extract_doi_candidates(

@@ -8,12 +8,21 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
+from . import __version__
 from .config import Settings
-from .exceptions import CatalogueError, ConfigurationError, FileOperationError, LamError
-from .models import WorkflowStatus
+from .exceptions import (
+    CatalogueError,
+    ConfigurationError,
+    FileOperationError,
+    LamError,
+    NetworkError,
+    ProviderError,
+)
+from .models import MetadataLookupRequest, WorkflowStatus
 from .workflows.catalogue_filing import CatalogueFilingWorkflow
 from .workflows.daily_check import DailyCheckWorkflow
 from .workflows.inbox_register import InboxRegisterWorkflow
+from .workflows.metadata_query import MetadataQueryWorkflow
 
 
 EXIT_CODES = {
@@ -26,6 +35,7 @@ EXIT_CODES = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lam", description="Local Archives Manager")
+    parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", type=Path, help="Research library root")
@@ -46,6 +56,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not extract PDF page text after filename matching fails",
     )
+    search = subparsers.add_parser("search", parents=[common], help="Run Workflow 2")
+    search.add_argument("--pmid")
+    search.add_argument("--doi")
+    search.add_argument("--title")
+    search.add_argument("--arxiv-id")
+    search.add_argument("--catalogue-id")
+    search.add_argument("--row", type=int)
+    search.add_argument("--missing-metadata", action="store_true")
+    search.add_argument(
+        "--provider",
+        choices=("auto", "pubmed", "arxiv", "unpaywall"),
+        default="auto",
+    )
+    search.add_argument("--max-results", type=int, default=10)
+    search.add_argument("--max-records", type=int, default=25)
+    search.add_argument("--offline", action="store_true")
+    search.add_argument("--refresh", action="store_true")
+    search.add_argument("--no-cache-write", action="store_true")
     return parser
 
 
@@ -68,13 +96,13 @@ def main(argv: list[str] | None = None) -> int:
         settings = Settings.from_root(args.root)
         _configure_logging(settings, args.verbose)
         lock = FileLock(settings.lock_path, timeout=0)
-        context = lock if not args.dry_run else _NullContext()
+        context = lock if (not args.dry_run or args.command == "search") else _NullContext()
         with context:
             if args.command == "check":
                 result = DailyCheckWorkflow(settings).run(dry_run=args.dry_run)
             elif args.command == "file":
                 result = CatalogueFilingWorkflow(settings).run(dry_run=args.dry_run)
-            else:
+            elif args.command == "register":
                 if args.max_files is not None and args.max_files <= 0:
                     raise ConfigurationError("--max-files must be greater than zero")
                 result = InboxRegisterWorkflow(settings).run(
@@ -82,6 +110,44 @@ def main(argv: list[str] | None = None) -> int:
                     max_files=args.max_files,
                     filename_only=args.filename_only,
                     skip_pdf_text=args.skip_pdf_text,
+                )
+            else:
+                if not any(
+                    (
+                        args.pmid,
+                        args.doi,
+                        args.title,
+                        args.arxiv_id,
+                        args.catalogue_id,
+                        args.row is not None,
+                        args.missing_metadata,
+                    )
+                ):
+                    raise ConfigurationError(
+                        "search requires an identifier, title, catalogue target, or --missing-metadata"
+                    )
+                if args.row is not None and args.row < 2:
+                    raise ConfigurationError("--row must be an Excel row number of 2 or greater")
+                if args.max_results <= 0 or args.max_records <= 0:
+                    raise ConfigurationError("--max-results and --max-records must be positive")
+                request = MetadataLookupRequest(
+                    pmid=args.pmid,
+                    doi=args.doi,
+                    title=args.title,
+                    arxiv_id=args.arxiv_id,
+                    provider=args.provider,
+                    max_results=args.max_results,
+                    refresh=args.refresh,
+                    offline=args.offline,
+                    cache_write=not args.no_cache_write,
+                )
+                result = MetadataQueryWorkflow(settings).run(
+                    request,
+                    dry_run=args.dry_run,
+                    catalogue_row=args.row,
+                    catalogue_id=args.catalogue_id,
+                    missing_metadata=args.missing_metadata,
+                    max_records=args.max_records,
                 )
         payload = {
             "status": result.status.value,
@@ -94,7 +160,15 @@ def main(argv: list[str] | None = None) -> int:
                 f"{result.workflow}: {result.status.value}; "
                 f"files={result.changed_files}; rows={result.changed_rows}"
             )
-        print(json.dumps(payload, ensure_ascii=False))
+        print(
+            json.dumps(
+                result.to_dict() if args.json_output and args.command == "search" else payload,
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        if result.status == WorkflowStatus.FAILED and result.details.get("network_failure"):
+            return 40
         return EXIT_CODES[result.status]
     except Timeout:
         return _error("Another modifying LAM process holds the library lock", 10)
@@ -104,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         return _error(str(exc), 20)
     except FileOperationError as exc:
         return _error(str(exc), 30)
+    except (NetworkError, ProviderError) as exc:
+        return _error(str(exc), 40)
     except LamError as exc:
         return _error(str(exc), 30)
     except Exception as exc:  # pragma: no cover - last-resort CLI containment

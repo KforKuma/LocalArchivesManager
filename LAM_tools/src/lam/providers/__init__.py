@@ -1,4 +1,14 @@
-from .base import MetadataLookupService
+from .arxiv import ArxivProvider
+from .base import MetadataLookupService, MetadataProvider
+from .pubmed import PubMedProvider
 from .unavailable import UnavailableMetadataService
+from .unpaywall import UnpaywallProvider
 
-__all__ = ["MetadataLookupService", "UnavailableMetadataService"]
+__all__ = [
+    "ArxivProvider",
+    "MetadataLookupService",
+    "MetadataProvider",
+    "PubMedProvider",
+    "UnavailableMetadataService",
+    "UnpaywallProvider",
+]

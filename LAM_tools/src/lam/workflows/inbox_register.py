@@ -15,6 +15,7 @@ from ..models import (
     MatchStatus,
     MetadataLookupRequest,
     MetadataLookupStatus,
+    MetadataRecord,
     PdfStatus,
     WorkflowResult,
 )
@@ -24,11 +25,15 @@ from ..services.catalogue_service import CatalogueService
 from ..services.file_service import FileService
 from ..services.journal_service import OperationJournal, incomplete_journals
 from ..services.matching_service import MatchingService
+from ..services.metadata_service import CompositeMetadataLookupService
 from ..services.pdf_service import PdfService
 from ..services.report_service import ReportService, append_change_log
 from ..services.snapshot_service import SnapshotService
 from ..utils.filename import standard_pdf_filename
 from ..utils.normalize import normalized_relative_path
+from ..utils.identifiers import normalize_doi, normalize_pmid
+from ..utils.normalize import normalized_text
+from ..utils.text import normalize_title
 from .daily_check import DailyCheckWorkflow
 
 
@@ -39,7 +44,11 @@ class InboxRegisterWorkflow:
         metadata_service: MetadataLookupService | None = None,
     ):
         self.settings = settings
-        self.metadata_service = metadata_service or UnavailableMetadataService()
+        self.metadata_service = metadata_service or (
+            CompositeMetadataLookupService(settings)
+            if settings.metadata_lookup_enabled
+            else UnavailableMetadataService()
+        )
 
     def run(
         self,
@@ -201,24 +210,114 @@ class InboxRegisterWorkflow:
                 issue_key = match.issue_key or "paper_identity_not_found"
                 if match.requires_metadata_lookup:
                     metadata_requests += 1
-                    lookup = self.metadata_service.lookup(
-                        self._lookup_request(inspection, relative)
-                    )
+                    lookup_request = self._lookup_request(inspection, relative)
+                    lookup = self.metadata_service.lookup(lookup_request)
                     file_result["metadata_lookup_status"] = lookup.status.value
-                    if lookup.status == MetadataLookupStatus.UNAVAILABLE:
-                        issue_key = "metadata_lookup_unavailable"
+                    file_result["metadata_providers"] = lookup.providers_used
+                    file_result["metadata_selection_reason"] = lookup.selection_reason
+                    if (
+                        lookup.status == MetadataLookupStatus.FOUND
+                        and lookup.best_record
+                        and lookup.confidence in {"exact_identifier", "exact_title_supported"}
+                    ):
+                        metadata = MetadataRecord.from_dict(lookup.best_record)
+                        candidates = self._metadata_catalogue_candidates(records, metadata)
+                        if len(candidates) > 1:
+                            self._block(
+                                catalogue,
+                                None,
+                                result,
+                                file_result,
+                                "metadata_query_ambiguous",
+                                "Provider metadata matches multiple catalogue rows.",
+                                file=relative,
+                                field_name="metadata_query_ambiguous",
+                            )
+                            continue
+                        if candidates:
+                            record = candidates[0]
+                            updates, metadata_conflicts = self._metadata_updates(
+                                catalogue, record, metadata
+                            )
+                            if metadata_conflicts:
+                                self._block(
+                                    catalogue,
+                                    record,
+                                    result,
+                                    file_result,
+                                    "catalogue_existing_value_conflict",
+                                    "; ".join(metadata_conflicts),
+                                    file=relative,
+                                    field_name="metadata",
+                                )
+                                continue
+                            if updates:
+                                catalogue.update_fields(record, updates)
+                        else:
+                            if not self._eligible_provider_record(metadata):
+                                self._block(
+                                    catalogue,
+                                    None,
+                                    result,
+                                    file_result,
+                                    "metadata_query_ambiguous",
+                                    "Provider result is not sufficient for a durable catalogue row.",
+                                    file=relative,
+                                    field_name="metadata_query_ambiguous",
+                                )
+                                continue
+                            record = catalogue.add_record(
+                                self._metadata_row_values(
+                                    catalogue, metadata, source.name, relative
+                                )
+                            )
+                        file_result["match_status"] = MatchStatus.EXACT.value
+                        file_result["matched_catalogue_id"] = record.get("id")
+                        file_result["match_method"] = "workflow2_provider"
+                    else:
+                        issue_key = {
+                            MetadataLookupStatus.NOT_FOUND: "metadata_query_not_found",
+                            MetadataLookupStatus.AMBIGUOUS: "metadata_query_ambiguous",
+                            MetadataLookupStatus.CONFLICT: "metadata_cross_provider_conflict",
+                            MetadataLookupStatus.UNAVAILABLE: "metadata_provider_unavailable",
+                            MetadataLookupStatus.FAILED: "metadata_provider_failed",
+                        }.get(lookup.status, "metadata_query_ambiguous")
+                        self._block(
+                            catalogue,
+                            record,
+                            result,
+                            file_result,
+                            issue_key,
+                            lookup.selection_reason
+                            or "; ".join(lookup.errors)
+                            or "Metadata lookup did not produce a unique high-confidence result.",
+                            file=relative,
+                            field_name=issue_key,
+                        )
+                        continue
+                else:
+                    self._block(
+                        catalogue,
+                        record,
+                        result,
+                        file_result,
+                        issue_key,
+                        "; ".join(match.conflicts) or "Paper identity requires review.",
+                        file=relative,
+                    )
+                    continue
+            if record is None:
                 self._block(
                     catalogue,
                     record,
                     result,
                     file_result,
-                    issue_key,
-                    "; ".join(match.conflicts) or "Paper identity requires metadata lookup.",
+                    "paper_identity_not_found",
+                    "Paper identity could not be attached to a catalogue row.",
                     file=relative,
                 )
                 continue
 
-            assert record is not None
             if inspection.is_probable_supplement:
                 self._block(
                     catalogue,
@@ -549,6 +648,100 @@ class InboxRegisterWorkflow:
             journal=inspection.journal_candidates[0] if inspection.journal_candidates else None,
             source_pdf=relative,
         )
+
+    @staticmethod
+    def _metadata_catalogue_candidates(
+        records: list[CatalogueRecord], metadata: MetadataRecord
+    ) -> list[CatalogueRecord]:
+        for field, value, normalizer in (
+            ("pmid", metadata.pmid, normalize_pmid),
+            ("doi", metadata.doi, normalize_doi),
+        ):
+            key = normalizer(value)
+            if key:
+                matches = [row for row in records if normalizer(row.get(field)) == key]
+                if matches:
+                    return matches
+        title = normalize_title(metadata.title)
+        if not title:
+            return []
+        matches = [row for row in records if normalize_title(row.get("title")) == title]
+        if metadata.year:
+            supported = [
+                row
+                for row in matches
+                if not row.get("year") or str(row.get("year")).strip() == metadata.year
+            ]
+            if supported:
+                matches = supported
+        return matches
+
+    @staticmethod
+    def _metadata_updates(
+        catalogue: CatalogueService,
+        record: CatalogueRecord,
+        metadata: MetadataRecord,
+    ) -> tuple[dict[str, Any], list[str]]:
+        updates: dict[str, Any] = {}
+        conflicts: list[str] = []
+        for field, value in metadata.catalogue_fields().items():
+            if field not in catalogue.headers or value in (None, ""):
+                continue
+            current = record.get(field)
+            if current in (None, ""):
+                updates[field] = value
+                continue
+            if field == "doi":
+                equivalent = normalize_doi(current) == normalize_doi(value)
+            elif field == "pmid":
+                equivalent = normalize_pmid(current) == normalize_pmid(value)
+            elif field == "title":
+                equivalent = normalize_title(current) == normalize_title(value)
+            else:
+                equivalent = normalized_text(current) == normalized_text(value)
+            if not equivalent and field in {
+                "title",
+                "authors",
+                "year",
+                "journal",
+                "doi",
+                "pmid",
+            }:
+                conflicts.append(f"field={field}")
+        return updates, conflicts
+
+    @staticmethod
+    def _eligible_provider_record(metadata: MetadataRecord) -> bool:
+        return bool(
+            (metadata.pmid or metadata.doi or metadata.arxiv_id)
+            and metadata.title
+            and metadata.authors
+            and metadata.year
+            and metadata.source
+        )
+
+    @staticmethod
+    def _metadata_row_values(
+        catalogue: CatalogueService,
+        metadata: MetadataRecord,
+        filename: str,
+        relative: str,
+    ) -> dict[str, Any]:
+        today = date.today().isoformat()
+        values = {
+            "id": metadata.canonical_id,
+            **metadata.catalogue_fields(),
+            "pdf_status": PdfStatus.INBOX.value,
+            "pdf_filename": filename,
+            "pdf_relative_path": relative,
+            "date_added": today,
+            "date_updated": today,
+        }
+        return {
+            key: value
+            for key, value in values.items()
+            if key in catalogue.headers and value not in (None, "")
+        }
 
     @staticmethod
     def _block(

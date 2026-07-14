@@ -13,3 +13,14 @@ class CatalogueError(LamError):
 class FileOperationError(LamError):
     """A managed file operation is unsafe or failed."""
 
+
+class NetworkError(LamError):
+    """A provider request failed after bounded retries."""
+
+
+class ProviderError(LamError):
+    """A provider response is invalid or cannot be parsed safely."""
+
+
+class CacheError(LamError):
+    """The metadata cache cannot be read or written safely."""

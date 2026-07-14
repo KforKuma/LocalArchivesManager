@@ -6,7 +6,13 @@ from openpyxl import load_workbook
 
 from lam.config import Settings
 from lam.exceptions import CatalogueError
-from lam.models import WorkflowStatus
+from lam.models import (
+    MetadataLookupResult,
+    MetadataLookupStatus,
+    MetadataRecord,
+    WorkflowStatus,
+)
+from lam.providers.unavailable import UnavailableMetadataService
 from lam.services.catalogue_service import CatalogueService
 from lam.services.file_service import FileService
 from lam.workflows.inbox_register import InboxRegisterWorkflow
@@ -31,7 +37,7 @@ def test_filename_match_registers_updates_catalogue_and_final_checks(library_fac
     write_text_pdf(root / "Inbox" / "download.pdf", ["A Registered Biomedical Paper\nAuthors\n2025"])
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
-    result = InboxRegisterWorkflow(settings).run()
+    result = InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     target = root / "Registered" / "Test J, 2025 - A Registered Biomedical Paper.pdf"
     assert result.status == WorkflowStatus.SUCCESS
     assert target.exists()
@@ -69,7 +75,7 @@ def test_doi_match_registers_when_filename_is_unknown(library_factory):
     )
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
-    result = InboxRegisterWorkflow(settings).run()
+    result = InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     assert result.status == WorkflowStatus.SUCCESS
     assert (root / "Registered" / "Identifier Journal, 2024 - Identifier Matched Paper.pdf").exists()
     assert result.details["files"][0]["match_method"] == "doi"
@@ -80,11 +86,11 @@ def test_unavailable_metadata_blocks_without_creating_catalogue_row(library_fact
     write_text_pdf(root / "Inbox" / "unknown.pdf", ["Unknown Local Document\nNo identifiers"])
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
-    result = InboxRegisterWorkflow(settings).run()
+    result = InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Inbox" / "unknown.pdf").exists()
     assert result.details["metadata_lookup_requests"] == 1
-    assert result.details["files"][0]["issue_keys"] == ["metadata_lookup_unavailable"]
+    assert result.details["files"][0]["issue_keys"] == ["metadata_provider_unavailable"]
     workbook = load_workbook(root / "catalogue.xlsx")
     assert workbook["Catalogue"].max_row == 1
 
@@ -126,7 +132,7 @@ def test_one_blocked_file_does_not_prevent_other_registration(library_factory):
     write_text_pdf(root / "Inbox" / "unknown.pdf", ["Unknown Paper"])
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
-    result = InboxRegisterWorkflow(settings).run()
+    result = InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Registered" / "Ready Journal, 2025 - Ready Paper.pdf").exists()
     assert (root / "Inbox" / "unknown.pdf").exists()
@@ -206,14 +212,14 @@ def test_unknown_file_blocker_state_is_stable_across_runs(library_factory):
     write_text_pdf(root / "Inbox" / "unknown.pdf", ["Unknown Document"])
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
-    InboxRegisterWorkflow(settings).run()
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     blocker_path = root / ".library_state" / "inbox_blockers.json"
     first = blocker_path.read_bytes()
-    InboxRegisterWorkflow(settings).run()
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     assert blocker_path.read_bytes() == first
     payload = json.loads(first)
     assert len(payload["files"]) == 1
-    assert payload["files"][0]["issue_keys"] == ["metadata_lookup_unavailable"]
+    assert payload["files"][0]["issue_keys"] == ["metadata_provider_unavailable"]
 
 
 def test_source_change_before_move_is_blocked_and_other_state_is_preserved(
@@ -342,3 +348,67 @@ def test_registered_filename_collision_preserves_both_files(library_factory):
     assert source.exists()
     assert target.read_bytes() == target_before
     assert any(item.get("issue") == "registered_filename_collision" for item in result.needs_review)
+
+
+class FixedMetadataService:
+    def __init__(self, lookup):
+        self.lookup_result = lookup
+        self.calls = 0
+
+    def lookup(self, request):
+        self.calls += 1
+        return self.lookup_result
+
+
+def test_workflow3_provider_result_creates_row_and_registers(library_factory):
+    root = library_factory([])
+    write_text_pdf(
+        root / "Inbox" / "provider.pdf",
+        ["Provider Identified Paper\nAlice Smith\ndoi:10.1000/provider\n2025"],
+    )
+    metadata = MetadataRecord(
+        canonical_id="PMID:12345678",
+        title="Provider Identified Paper",
+        authors=["Alice Smith"],
+        year="2025",
+        journal="Biomedical Journal",
+        journal_abbrev="Biomed J",
+        doi="10.1000/provider",
+        pmid="12345678",
+        source=["pubmed"],
+    )
+    lookup = MetadataLookupResult(
+        MetadataLookupStatus.FOUND,
+        records=[metadata.to_dict()],
+        best_record=metadata.to_dict(),
+        confidence="exact_identifier",
+        providers_used=["pubmed"],
+        selection_reason="DOI matched exactly.",
+    )
+    service = FixedMetadataService(lookup)
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(settings, service).run()
+    target = root / "Registered" / "Biomed J, 2025 - Provider Identified Paper.pdf"
+    assert target.exists()
+    assert service.calls == 1
+    assert result.details["files"][0]["match_method"] == "workflow2_provider"
+    workbook = load_workbook(root / "catalogue.xlsx")
+    assert workbook["Catalogue"].max_row == 2
+    assert workbook["Catalogue"]["A2"].value == "PMID:12345678"
+
+
+def test_workflow3_ambiguous_provider_keeps_file_and_does_not_add_row(library_factory):
+    root = library_factory([])
+    write_text_pdf(root / "Inbox" / "ambiguous.pdf", ["Ambiguous Provider Paper"])
+    lookup = MetadataLookupResult(
+        MetadataLookupStatus.AMBIGUOUS,
+        confidence="ambiguous",
+        selection_reason="Two candidates remain.",
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(settings, FixedMetadataService(lookup)).run()
+    assert result.status == WorkflowStatus.NEEDS_REVIEW
+    assert (root / "Inbox" / "ambiguous.pdf").exists()
+    assert load_workbook(root / "catalogue.xlsx")["Catalogue"].max_row == 1

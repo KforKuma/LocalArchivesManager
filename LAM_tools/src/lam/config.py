@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .exceptions import ConfigurationError
@@ -13,6 +13,80 @@ def _load_optional_dotenv(project_root: Path) -> None:
     except ImportError:
         return
     load_dotenv(project_root / ".env", override=False)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    try:
+        return float(value) if value is not None else default
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a number") from exc
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    try:
+        return int(value) if value is not None else default
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkConfig:
+    timeout_seconds: float = 30.0
+    connect_timeout_seconds: float = 10.0
+    read_timeout_seconds: float = 30.0
+    max_retries: int = 3
+    max_response_bytes: int = 10 * 1024 * 1024
+    user_agent: str = "LAM/0.3.0"
+
+
+@dataclass(frozen=True, slots=True)
+class PubMedConfig:
+    enabled: bool = True
+    base_url: str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    email: str = ""
+    tool: str = "LAM"
+    api_key: str = field(default="", repr=False)
+    min_interval_seconds: float = 0.36
+    batch_size: int = 100
+    exact_ttl_seconds: int = 30 * 24 * 3600
+    search_ttl_seconds: int = 7 * 24 * 3600
+
+
+@dataclass(frozen=True, slots=True)
+class ArxivConfig:
+    enabled: bool = True
+    base_url: str = "https://export.arxiv.org/api/query"
+    min_interval_seconds: float = 3.2
+    exact_ttl_seconds: int = 30 * 24 * 3600
+    search_ttl_seconds: int = 7 * 24 * 3600
+
+
+@dataclass(frozen=True, slots=True)
+class UnpaywallConfig:
+    enabled: bool = True
+    base_url: str = "https://api.unpaywall.org/v2"
+    email: str = ""
+    min_interval_seconds: float = 0.25
+    ttl_seconds: int = 7 * 24 * 3600
+    daily_limit: int = 100_000
+
+
+@dataclass(frozen=True, slots=True)
+class CacheConfig:
+    enabled: bool = True
+    not_found_ttl_seconds: int = 24 * 3600
+    cache_schema_version: str = "1"
+    parser_version: str = "1"
+    provider_schema_version: str = "1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +109,13 @@ class Settings:
     pdf_title_max_length: int = 300
     inbox_recursive: bool = False
     inspection_cache_enabled: bool = True
-    metadata_lookup_enabled: bool = False
+    metadata_lookup_enabled: bool = True
+    metadata_cache_dir: Path | None = None
+    network: NetworkConfig = field(default_factory=NetworkConfig)
+    pubmed: PubMedConfig = field(default_factory=PubMedConfig)
+    arxiv: ArxivConfig = field(default_factory=ArxivConfig)
+    unpaywall: UnpaywallConfig = field(default_factory=UnpaywallConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
 
     @classmethod
     def from_root(cls, root: str | Path | None = None) -> "Settings":
@@ -48,6 +128,43 @@ class Settings:
         catalogue = library_root / "catalogue.xlsx"
         if not catalogue.is_file():
             raise ConfigurationError(f"Required catalogue is missing: {catalogue}")
+        api_key = os.getenv("NCBI_API_KEY", "").strip()
+        pubmed_interval = 0.11 if api_key else 0.36
+        network = NetworkConfig(
+            timeout_seconds=_env_float("HTTP_TIMEOUT_SECONDS", 30.0),
+            connect_timeout_seconds=_env_float("HTTP_CONNECT_TIMEOUT_SECONDS", 10.0),
+            read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
+            max_retries=_env_int("HTTP_MAX_RETRIES", 3),
+            max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.3.0").strip() or "LAM/0.3.0",
+        )
+        if network.max_retries < 0 or network.max_response_bytes <= 0:
+            raise ConfigurationError("HTTP retry and response-size settings are invalid")
+        pubmed = PubMedConfig(
+            enabled=_env_bool("PUBMED_ENABLED", True),
+            email=os.getenv("NCBI_EMAIL", "").strip(),
+            tool=os.getenv("NCBI_TOOL", "LAM").strip() or "LAM",
+            api_key=api_key,
+            min_interval_seconds=max(
+                pubmed_interval,
+                _env_float("PUBMED_MIN_INTERVAL_SECONDS", pubmed_interval),
+            ),
+            batch_size=max(1, _env_int("PUBMED_BATCH_SIZE", 100)),
+        )
+        arxiv = ArxivConfig(
+            enabled=_env_bool("ARXIV_ENABLED", True),
+            min_interval_seconds=max(3.0, _env_float("ARXIV_DELAY_SECONDS", 3.2)),
+        )
+        unpaywall = UnpaywallConfig(
+            enabled=_env_bool("UNPAYWALL_ENABLED", True),
+            email=os.getenv("UNPAYWALL_EMAIL", "").strip(),
+            min_interval_seconds=max(
+                0.2, _env_float("UNPAYWALL_MIN_INTERVAL_SECONDS", 0.25)
+            ),
+            daily_limit=min(
+                100_000, max(1, _env_int("UNPAYWALL_DAILY_LIMIT", 100_000))
+            ),
+        )
         return cls(
             library_root=library_root,
             project_root=project_root,
@@ -59,6 +176,11 @@ class Settings:
             registered_dir=library_root / "Registered",
             changes_log_path=library_root / "library_changes.md",
             lock_path=library_root / ".library_state" / "lam.lock",
+            metadata_cache_dir=library_root / ".library_state" / "metadata_cache",
+            network=network,
+            pubmed=pubmed,
+            arxiv=arxiv,
+            unpaywall=unpaywall,
         )
 
     def ensure_runtime_directories(self) -> None:

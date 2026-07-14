@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from lam.cli import main
 
 
@@ -38,3 +40,28 @@ def test_cli_register_help_and_max_files_validation(capsys):
     assert args.command == "register"
     assert args.max_files == 2
     assert args.filename_only is True
+
+
+def test_cli_version_and_search_arguments(capsys):
+    from lam.cli import build_parser
+
+    with pytest.raises(SystemExit) as exit_info:
+        build_parser().parse_args(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == "0.3.0"
+
+    args = build_parser().parse_args(
+        [
+            "search",
+            "--doi",
+            "10.1000/example",
+            "--provider",
+            "pubmed",
+            "--offline",
+            "--no-cache-write",
+        ]
+    )
+    assert args.command == "search"
+    assert args.provider == "pubmed"
+    assert args.offline is True
+    assert args.no_cache_write is True

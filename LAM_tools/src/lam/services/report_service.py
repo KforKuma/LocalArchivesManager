@@ -36,6 +36,7 @@ class ReportService:
             "daily_check": "Daily library check",
             "catalogue_filing": "Catalogue-based filing report",
             "inbox_register": "Inbox registration report",
+            "metadata_query": "Metadata query report",
         }.get(result.workflow, result.workflow)
         lines = [
             f"# {title}",

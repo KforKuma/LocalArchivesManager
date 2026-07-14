@@ -15,12 +15,21 @@ class OperationJournal:
         self.payload = payload
 
     @classmethod
-    def create(cls, state_dir: Path, operations: list[dict[str, Any]]) -> "OperationJournal":
-        run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f-register")
+    def create(
+        cls,
+        state_dir: Path,
+        operations: list[dict[str, Any]],
+        *,
+        workflow: str = "inbox_register",
+        suffix: str = "register",
+    ) -> "OperationJournal":
+        run_id = datetime.now().astimezone().strftime(
+            f"%Y%m%d-%H%M%S-%f-{suffix}"
+        )
         path = state_dir / "runs" / run_id / "operation_journal.json"
         payload = {
             "run_id": run_id,
-            "workflow": "inbox_register",
+            "workflow": workflow,
             "status": "planned",
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "operations": operations,
@@ -73,6 +82,7 @@ def incomplete_journals(state_dir: Path) -> list[dict[str, Any]]:
                 {
                     "journal": str(path),
                     "run_id": payload.get("run_id"),
+                    "workflow": payload.get("workflow"),
                     "status": payload.get("status"),
                 }
             )

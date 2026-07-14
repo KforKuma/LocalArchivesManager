@@ -447,11 +447,11 @@ Run only when explicitly requested by the user.
 
 A request to run Workflow 3 authorizes routine high-confidence renaming and movement from `Inbox/` to `Registered/`.
 
-The current phase-2 implementation processes only direct, non-hidden `.pdf`
-children of `Inbox/`. It uses bounded `pypdf` inspection and local catalogue
-matching. The metadata provider is deliberately unavailable in this phase and
-does not perform network requests; insufficient local evidence becomes a stable
-review item.
+The phase-3 implementation processes only direct, non-hidden `.pdf` children
+of `Inbox/`. It uses bounded `pypdf` inspection and local catalogue matching,
+then calls the replaceable Workflow 2 metadata service only when local evidence
+is insufficient. Provider results must be unique and high-confidence before a
+new catalogue row is created or registration continues.
 
 ---
 

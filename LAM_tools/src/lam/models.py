@@ -48,7 +48,18 @@ class MetadataLookupStatus(StrEnum):
     FOUND = "found"
     NOT_FOUND = "not_found"
     AMBIGUOUS = "ambiguous"
+    CONFLICT = "conflict"
     UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+
+
+class ProviderStatus(StrEnum):
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
+    UNAVAILABLE = "unavailable"
+    UNAVAILABLE_OFFLINE = "unavailable_offline"
+    DISABLED = "disabled"
     FAILED = "failed"
 
 
@@ -178,11 +189,130 @@ class MatchResult:
 class MetadataLookupRequest:
     doi: str | None = None
     pmid: str | None = None
+    arxiv_id: str | None = None
     title: str | None = None
     authors: str | None = None
     year: str | None = None
     journal: str | None = None
     source_pdf: str | None = None
+    provider: str = "auto"
+    max_results: int = 10
+    refresh: bool = False
+    offline: bool = False
+    cache_write: bool = True
+
+
+@dataclass(slots=True)
+class MetadataProvenance:
+    field_name: str
+    value: Any
+    provider: str
+    source_identifier: str = ""
+    retrieved_at: str = ""
+    confidence: str = "high"
+
+
+@dataclass(slots=True)
+class MetadataConflict:
+    field_name: str
+    values: dict[str, Any]
+    issue_key: str
+    blocking: bool = True
+
+
+@dataclass(slots=True)
+class MetadataRecord:
+    canonical_id: str = ""
+    title: str = ""
+    authors: list[str] = field(default_factory=list)
+    year: str = ""
+    journal: str = ""
+    journal_abbrev: str = ""
+    doi: str = ""
+    pmid: str = ""
+    arxiv_id: str = ""
+    publication_type: list[str] = field(default_factory=list)
+    abstract: str = ""
+    keywords: list[str] = field(default_factory=list)
+    mesh_terms: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)
+    language: str = ""
+    published_date: str = ""
+    updated_date: str = ""
+    source: list[str] = field(default_factory=list)
+    source_ids: dict[str, str] = field(default_factory=dict)
+    is_preprint: bool = False
+    is_published: bool = False
+    oa_status: str = ""
+    best_oa_url: str = ""
+    pdf_url: str = ""
+    landing_page_url: str = ""
+    provenance: list[MetadataProvenance] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MetadataRecord":
+        values = dict(payload)
+        values["provenance"] = [
+            item if isinstance(item, MetadataProvenance) else MetadataProvenance(**item)
+            for item in values.get("provenance", [])
+        ]
+        allowed = cls.__dataclass_fields__.keys()
+        return cls(**{key: value for key, value in values.items() if key in allowed})
+
+    def catalogue_fields(self) -> dict[str, Any]:
+        publication = "; ".join(self.publication_type)
+        keywords = list(dict.fromkeys([*self.keywords, *self.mesh_terms]))
+        return {
+            "title": self.title,
+            "authors": "; ".join(self.authors),
+            "year": self.year,
+            "journal": self.journal,
+            "journal_abbrev": self.journal_abbrev,
+            "doi": self.doi,
+            "pmid": self.pmid,
+            "publication_type": publication,
+            "abstract": self.abstract,
+            "keywords": "; ".join(keywords),
+            "auto_tags": "; ".join(self.categories),
+            "source": "; ".join(self.source),
+        }
+
+
+@dataclass(slots=True)
+class ProviderStats:
+    request_count: int = 0
+    cache_hits: int = 0
+    retries: int = 0
+    rate_limit_wait_seconds: float = 0.0
+    records_returned: int = 0
+    parse_errors: int = 0
+
+
+@dataclass(slots=True)
+class ProviderResult:
+    provider: str
+    status: ProviderStatus
+    query_type: str
+    query_value: str
+    records: list[MetadataRecord] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    stats: ProviderStats = field(default_factory=ProviderStats)
+    cache_hit: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "status": self.status.value,
+            "query_type": self.query_type,
+            "query_value": self.query_value,
+            "records": [record.to_dict() for record in self.records],
+            "errors": self.errors,
+            "stats": asdict(self.stats),
+            "cache_hit": self.cache_hit,
+        }
 
 
 @dataclass(slots=True)
@@ -194,6 +324,9 @@ class MetadataLookupResult:
     providers_used: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    provider_results: list[ProviderResult] = field(default_factory=list)
+    selection_reason: str = ""
+    conflicts_detail: list[MetadataConflict] = field(default_factory=list)
 
 
 @dataclass(slots=True)

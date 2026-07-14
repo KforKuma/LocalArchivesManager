@@ -20,6 +20,7 @@ from ..schema import (
     SNAPSHOT_FIELDS,
     USER_CONTROLLED_FIELDS,
 )
+from ..utils.identifiers import normalize_doi, normalize_pmid
 from ..utils.normalize import normalized_text
 
 
@@ -103,7 +104,7 @@ class CatalogueService:
                 continue
             seen: dict[str, int] = {}
             for record in self.records:
-                key = normalized_text(record.get(field_name))
+                key = self._field_key(field_name, record.get(field_name))
                 if not key:
                     continue
                 if key in seen:
@@ -117,10 +118,22 @@ class CatalogueService:
             raise CatalogueError("Duplicate catalogue identifiers/paths: " + "; ".join(problems))
 
     def find_by(self, field_name: str, value: object) -> list[CatalogueRecord]:
-        key = normalized_text(value)
+        key = self._field_key(field_name, value)
         if not key:
             return []
-        return [record for record in self.records if normalized_text(record.get(field_name)) == key]
+        return [
+            record
+            for record in self.records
+            if self._field_key(field_name, record.get(field_name)) == key
+        ]
+
+    @staticmethod
+    def _field_key(field_name: str, value: object) -> str:
+        if field_name == "doi":
+            return normalize_doi(value)
+        if field_name == "pmid":
+            return normalize_pmid(value)
+        return normalized_text(value)
 
     def update_fields(self, record: CatalogueRecord, updates: dict[str, Any]) -> list[CatalogueChange]:
         if self.worksheet is None:
@@ -151,6 +164,40 @@ class CatalogueService:
             self.changes.append(change)
             applied.append(change)
         return applied
+
+    def add_record(self, values: dict[str, Any]) -> CatalogueRecord:
+        """Append one machine-created row without changing existing row order."""
+        if self.worksheet is None:
+            raise CatalogueError("Catalogue must be loaded before a row can be added")
+        supplied = {
+            key: value for key, value in values.items() if key in self.headers and value not in (None, "")
+        }
+        unsupported = set(supplied) - (
+            {"id"} | MACHINE_FILLABLE_FIELDS | MACHINE_MAINTAINED_FIELDS
+        )
+        if unsupported:
+            raise CatalogueError(
+                f"Refusing unsupported fields in new catalogue row: {sorted(unsupported)}"
+            )
+        if any(supplied.get(field) for field in USER_CONTROLLED_FIELDS):
+            raise CatalogueError("Machine-created rows cannot set user-controlled fields")
+        for field_name in ("id", "doi", "pmid"):
+            value = supplied.get(field_name)
+            if value and self.find_by(field_name, value):
+                raise CatalogueError(
+                    f"Refusing duplicate catalogue record: {field_name}={value!r}"
+                )
+        row_number = self.worksheet.max_row + 1
+        for field_name, value in supplied.items():
+            self.worksheet.cell(row=row_number, column=self.headers[field_name]).value = value
+        record_values = {
+            name: self.worksheet.cell(row=row_number, column=column).value
+            for name, column in self.headers.items()
+        }
+        record = CatalogueRecord(row_number=row_number, values=record_values)
+        self.records.append(record)
+        self.changes.append(CatalogueChange(row_number, "__row__", None, supplied))
+        return record
 
     @staticmethod
     def _equivalent(left: Any, right: Any) -> bool:
