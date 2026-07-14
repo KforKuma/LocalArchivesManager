@@ -1,4 +1,6 @@
 import json
+from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -7,9 +9,12 @@ from openpyxl import load_workbook
 from lam.config import Settings
 from lam.exceptions import CatalogueError
 from lam.models import (
+    IdentifierCandidate,
     MetadataLookupResult,
     MetadataLookupStatus,
     MetadataRecord,
+    OcrInspection,
+    TitleCandidate,
     WorkflowStatus,
 )
 from lam.providers.unavailable import UnavailableMetadataService
@@ -18,6 +23,40 @@ from lam.services.file_service import FileService
 from lam.workflows.inbox_register import InboxRegisterWorkflow
 
 from conftest import write_text_pdf
+
+
+class FixedOcrService:
+    def __init__(self, results):
+        self.results = results
+        self.calls = []
+
+    def inspect_first_page(self, path, **kwargs):
+        self.calls.append(path.name)
+        value = self.results[path.name] if isinstance(self.results, dict) else self.results
+        result = deepcopy(value)
+        result.trigger_reason = kwargs["trigger_reason"]
+        return result
+
+
+def with_ocr(settings):
+    return replace(
+        settings,
+        ocr=replace(settings.ocr, enabled=True, gpu="false", min_text_chars=80),
+    )
+
+
+def ocr_success(*, title, doi="", year=""):
+    return OcrInspection(
+        status="success",
+        title_candidates=[TitleCandidate(title, "high", "ocr_page_top", 1)],
+        doi_candidates=(
+            [IdentifierCandidate(doi, 1, doi, "high", "ocr")] if doi else []
+        ),
+        year_candidates=[year] if year else [],
+        combined_text="\n".join(item for item in (title, doi, year) if item),
+        gpu_mode="cpu",
+        dpi=250,
+    )
 
 
 def test_filename_match_registers_updates_catalogue_and_final_checks(library_factory):
@@ -412,3 +451,190 @@ def test_workflow3_ambiguous_provider_keeps_file_and_does_not_add_row(library_fa
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Inbox" / "ambiguous.pdf").exists()
     assert load_workbook(root / "catalogue.xlsx")["Catalogue"].max_row == 1
+
+
+def test_scanned_pdf_ocr_doi_registers_to_existing_row(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P-OCR",
+                "title": "Scanned Biomedical Registration",
+                "doi": "10.1000/ocr.register",
+                "year": "2025",
+                "journal": "OCR Journal",
+            }
+        ]
+    )
+    source = root / "Inbox" / "scan.pdf"
+    write_text_pdf(source, [""])
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    ocr = FixedOcrService(
+        ocr_success(
+            title="Scanned Biomedical Registration",
+            doi="10.1000/ocr.register",
+            year="2025",
+        )
+    )
+    result = InboxRegisterWorkflow(
+        settings, UnavailableMetadataService(), ocr
+    ).run()
+    target = root / "Registered" / "OCR Journal, 2025 - Scanned Biomedical Registration.pdf"
+    assert target.exists()
+    file_report = result.details["files"][0]
+    assert file_report["ocr_triggered"] is True
+    assert file_report["ocr_status"] == "success"
+    assert file_report["ocr_doi_candidates"] == ["10.1000/ocr.register"]
+    assert "combined_text" not in json.dumps(file_report)
+    assert result.details["final_check"]["status"] in {"success", "no_changes"}
+
+
+def test_ocr_fuzzy_title_does_not_auto_register(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "A Highly Specific Biomedical Paper Title",
+                "year": "2025",
+                "journal": "Test Journal",
+            }
+        ]
+    )
+    source = root / "Inbox" / "scan.pdf"
+    write_text_pdf(source, [""])
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    ocr = FixedOcrService(
+        ocr_success(title="A Highly Specific Biomedical Paper Tltle")
+    )
+    result = InboxRegisterWorkflow(
+        settings, UnavailableMetadataService(), ocr
+    ).run()
+    assert source.exists()
+    assert result.status == WorkflowStatus.NEEDS_REVIEW
+    assert "paper_identity_ambiguous" in result.details["files"][0]["issue_keys"]
+
+
+def test_ocr_exact_title_without_support_still_requires_workflow2(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Exact OCR Title Needs Support",
+                "year": "2025",
+                "journal": "Test Journal",
+            }
+        ]
+    )
+    source = root / "Inbox" / "scan.pdf"
+    write_text_pdf(source, [""])
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(
+        settings,
+        UnavailableMetadataService(),
+        FixedOcrService(ocr_success(title="Exact OCR Title Needs Support")),
+    ).run()
+    assert source.exists()
+    assert result.details["metadata_lookup_requests"] == 1
+    assert "metadata_provider_unavailable" in result.details["files"][0]["issue_keys"]
+
+
+def test_ocr_unavailable_for_one_file_does_not_block_other_file(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Ready Text Paper",
+                "year": "2025",
+                "journal": "Ready Journal",
+                "pdf_filename": "ready.pdf",
+            }
+        ]
+    )
+    write_text_pdf(root / "Inbox" / "blank.pdf", [""])
+    write_text_pdf(root / "Inbox" / "ready.pdf", ["Ready Text Paper\nAuthor"])
+    unavailable = OcrInspection(
+        status="ocr_unavailable_model_missing",
+        errors=["ocr_unavailable_model_missing"],
+    )
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    ocr = FixedOcrService({"blank.pdf": unavailable, "ready.pdf": unavailable})
+    result = InboxRegisterWorkflow(
+        settings, UnavailableMetadataService(), ocr
+    ).run()
+    assert (root / "Inbox" / "blank.pdf").exists()
+    assert (root / "Registered" / "Ready Journal, 2025 - Ready Text Paper.pdf").exists()
+    assert result.changed_files == 1
+    assert any(
+        item.get("issue") == "ocr_unavailable_model_missing"
+        for item in result.needs_review
+    )
+
+
+def test_corrected_ocr_doi_alone_does_not_match_catalogue(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Different Catalogue Title",
+                "doi": "10.1000/corrected",
+                "year": "2025",
+                "journal": "Test Journal",
+            }
+        ]
+    )
+    source = root / "Inbox" / "scan.pdf"
+    write_text_pdf(source, [""])
+    ocr = OcrInspection(
+        status="success",
+        title_candidates=[TitleCandidate("Unconfirmed OCR Title", "medium", "ocr_page_top", 1)],
+        doi_candidates=[
+            IdentifierCandidate(
+                "10.1000/corrected", 1, "1O.1000/corrected", "medium", "ocr_corrected"
+            )
+        ],
+    )
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(
+        settings, UnavailableMetadataService(), FixedOcrService(ocr)
+    ).run()
+    assert source.exists()
+    assert result.details["files"][0]["match_method"] == "none"
+    assert "metadata_provider_unavailable" in result.details["files"][0]["issue_keys"]
+
+
+def test_ocr_doi_workflow2_metadata_is_revalidated_before_registration(library_factory):
+    root = library_factory([])
+    source = root / "Inbox" / "scan.pdf"
+    write_text_pdf(source, [""])
+    metadata = MetadataRecord(
+        canonical_id="DOI:10.1000/newocr",
+        title="Workflow Two Confirmed OCR Paper",
+        authors=["Alice Smith"],
+        year="2025",
+        journal="Metadata Journal",
+        doi="10.1000/newocr",
+        source=["pubmed"],
+    )
+    lookup = MetadataLookupResult(
+        MetadataLookupStatus.FOUND,
+        records=[metadata.to_dict()],
+        best_record=metadata.to_dict(),
+        confidence="exact_identifier",
+        providers_used=["pubmed"],
+    )
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    ocr = FixedOcrService(
+        ocr_success(
+            title="Workflow Two Confirmed OCR Paper",
+            doi="10.1000/newocr",
+            year="2025",
+        )
+    )
+    result = InboxRegisterWorkflow(settings, FixedMetadataService(lookup), ocr).run()
+    assert (root / "Registered" / "Metadata Journal, 2025 - Workflow Two Confirmed OCR Paper.pdf").exists()
+    assert result.details["files"][0]["match_method"] == "workflow2_provider"

@@ -44,7 +44,11 @@ class MatchingService:
         title_matches: set[int] = set()
         years: set[str] = set()
         if inspection:
-            doi_values = {item.value for item in inspection.doi_candidates}
+            doi_values = {
+                item.value
+                for item in inspection.doi_candidates
+                if item.source_type != "ocr_corrected"
+            }
             pmid_values = {item.value for item in inspection.pmid_candidates}
             title_values = {
                 normalize_title(item.value)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ from ..exceptions import CatalogueError, FileOperationError
 from ..models import (
     CatalogueRecord,
     FileOperation,
+    IdentifierCandidate,
     MatchStatus,
     MetadataLookupRequest,
     MetadataLookupStatus,
@@ -42,6 +43,7 @@ class InboxRegisterWorkflow:
         self,
         settings: Settings,
         metadata_service: MetadataLookupService | None = None,
+        ocr_service=None,
     ):
         self.settings = settings
         self.metadata_service = metadata_service or (
@@ -49,6 +51,7 @@ class InboxRegisterWorkflow:
             if settings.metadata_lookup_enabled
             else UnavailableMetadataService()
         )
+        self.ocr_service = ocr_service
 
     def run(
         self,
@@ -57,6 +60,10 @@ class InboxRegisterWorkflow:
         max_files: int | None = None,
         filename_only: bool = False,
         skip_pdf_text: bool = False,
+        ocr_mode: str = "auto",
+        ocr_languages: tuple[str, ...] | None = None,
+        ocr_dpi: int | None = None,
+        ocr_gpu: str | None = None,
     ) -> WorkflowResult:
         result = WorkflowResult(
             "inbox_register", dry_run=dry_run, mode="dry_run" if dry_run else "apply"
@@ -76,7 +83,9 @@ class InboxRegisterWorkflow:
 
         files = FileService(self.settings.library_root, self.settings.max_filename_length)
         matcher = MatchingService()
-        pdfs = PdfService(self.settings)
+        pdfs = PdfService(self.settings, self.ocr_service)
+        ocr_run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f-register")
+        ocr_files = 0
         discovered, skipped = self._discover_inbox()
         result.skipped.extend(skipped)
         if max_files is not None:
@@ -108,6 +117,16 @@ class InboxRegisterWorkflow:
                 inspection = pdfs.inspect(
                     source,
                     extract_text=not (filename_only or skip_pdf_text),
+                    ocr_mode=(
+                        "never"
+                        if filename_only or skip_pdf_text or ocr_files >= self.settings.ocr.max_files_per_run
+                        else ocr_mode
+                    ),
+                    ocr_languages=ocr_languages,
+                    ocr_dpi=ocr_dpi,
+                    ocr_gpu=ocr_gpu,
+                    run_id=ocr_run_id,
+                    ocr_cache_write=not dry_run,
                 )
             except (OSError, ValueError) as exc:
                 self._block(
@@ -124,6 +143,9 @@ class InboxRegisterWorkflow:
                 "readable" if inspection.is_readable else "unreadable"
             )
             file_result["inspection"] = inspection.report_summary()
+            if inspection.ocr_result is not None:
+                ocr_files += 1
+            self._add_ocr_report(file_result, inspection)
 
             known_record = self._record_for_match(records, initial_match.matched_row_id)
             try:
@@ -169,21 +191,44 @@ class InboxRegisterWorkflow:
                     file=relative,
                 )
                 continue
-            if (
-                not filename_only
-                and not skip_pdf_text
-                and "text_unavailable" in inspection.warnings
-            ):
+            if "pdf_text_ocr_conflict" in inspection.warnings:
                 self._block(
                     catalogue,
                     known_record,
                     result,
                     file_result,
-                    "pdf_text_unavailable",
-                    "PDF has no extractable text layer.",
+                    "pdf_text_ocr_conflict",
+                    "The embedded PDF text and first-page OCR point to conflicting evidence.",
                     file=relative,
                 )
                 continue
+            if not filename_only and not skip_pdf_text and "text_unavailable" in inspection.warnings:
+                ocr = inspection.ocr_result
+                has_ocr_evidence = bool(
+                    ocr
+                    and ocr.status == "success"
+                    and (ocr.title_candidates or ocr.doi_candidates or ocr.pmid_candidates)
+                )
+                if not has_ocr_evidence:
+                    issue_key = (
+                        "ocr_max_files_per_run"
+                        if ocr is None
+                        and ocr_mode != "never"
+                        and ocr_files >= self.settings.ocr.max_files_per_run
+                        else ocr.status
+                        if ocr is not None and ocr.status != "success"
+                        else "pdf_text_unavailable"
+                    )
+                    self._block(
+                        catalogue,
+                        known_record,
+                        result,
+                        file_result,
+                        issue_key,
+                        "Neither the PDF text layer nor first-page OCR supplied sufficient identification evidence.",
+                        file=relative,
+                    )
+                    continue
 
             match = initial_match if filename_only else matcher.match(
                 records,
@@ -201,6 +246,12 @@ class InboxRegisterWorkflow:
                         inspection=inspection,
                         confirmed_catalogue_id=confirmed_id,
                     )
+            if self._unsupported_ocr_title_only_match(match, inspection, records):
+                match.status = MatchStatus.NOT_FOUND
+                match.confidence = "insufficient"
+                match.method = "none"
+                match.requires_metadata_lookup = True
+                match.issue_key = "ocr_title_requires_support"
 
             file_result["match_status"] = match.status.value
             file_result["matched_catalogue_id"] = match.matched_catalogue_id
@@ -221,6 +272,18 @@ class InboxRegisterWorkflow:
                         and lookup.confidence in {"exact_identifier", "exact_title_supported"}
                     ):
                         metadata = MetadataRecord.from_dict(lookup.best_record)
+                        if not self._metadata_supports_inspection(metadata, inspection):
+                            self._block(
+                                catalogue,
+                                record,
+                                result,
+                                file_result,
+                                "ocr_provider_evidence_conflict",
+                                "Workflow 2 metadata does not confirm the local PDF/OCR evidence.",
+                                file=relative,
+                                field_name="paper_identity",
+                            )
+                            continue
                         candidates = self._metadata_catalogue_candidates(records, metadata)
                         if len(candidates) > 1:
                             self._block(
@@ -452,6 +515,7 @@ class InboxRegisterWorkflow:
             "ready": len(ready),
             "blocked": len(result.needs_review),
             "metadata_lookup_requests": metadata_requests,
+            "ocr_files": ocr_files,
         }
         result.details.update(
             {
@@ -639,14 +703,101 @@ class InboxRegisterWorkflow:
 
     @staticmethod
     def _lookup_request(inspection, relative: str) -> MetadataLookupRequest:
+        first_doi = inspection.doi_candidates[0] if inspection.doi_candidates else None
+        first_pmid = inspection.pmid_candidates[0] if inspection.pmid_candidates else None
+        first_title = inspection.title_candidates[0] if inspection.title_candidates else None
+        candidate = first_doi or first_pmid or first_title
         return MetadataLookupRequest(
-            doi=inspection.doi_candidates[0].value if inspection.doi_candidates else None,
-            pmid=inspection.pmid_candidates[0].value if inspection.pmid_candidates else None,
-            title=inspection.title_candidates[0].value if inspection.title_candidates else None,
+            doi=first_doi.value if first_doi else None,
+            pmid=first_pmid.value if first_pmid else None,
+            title=first_title.value if first_title else None,
             authors=inspection.metadata_author or None,
             year=inspection.year_candidates[0] if inspection.year_candidates else None,
             journal=inspection.journal_candidates[0] if inspection.journal_candidates else None,
             source_pdf=relative,
+            candidate_source=(candidate.source_type if candidate else None),
+            candidate_confidence=(candidate.confidence if candidate else None),
+            candidate_context=(candidate.line_or_context[:300] if isinstance(candidate, IdentifierCandidate) else candidate.value[:300] if candidate else None),
+        )
+
+    @staticmethod
+    def _metadata_supports_inspection(metadata: MetadataRecord, inspection) -> bool:
+        doi_candidates = [
+            item for item in inspection.doi_candidates if normalize_doi(item.value)
+        ]
+        pmid_candidates = [
+            item for item in inspection.pmid_candidates if normalize_pmid(item.value)
+        ]
+        title_matches = bool(
+            metadata.title
+            and any(
+                normalize_title(item.value) == normalize_title(metadata.title)
+                for item in inspection.title_candidates
+            )
+        )
+        year_matches = bool(
+            metadata.year and str(metadata.year).strip() in inspection.year_candidates
+        )
+        if metadata.doi and doi_candidates:
+            matching = [
+                item
+                for item in doi_candidates
+                if normalize_doi(item.value) == normalize_doi(metadata.doi)
+            ]
+            if matching:
+                if all(item.source_type == "ocr_corrected" for item in matching):
+                    return title_matches or (title_matches and year_matches)
+                return True
+            return False
+        if metadata.pmid and pmid_candidates:
+            return any(
+                normalize_pmid(item.value) == normalize_pmid(metadata.pmid)
+                for item in pmid_candidates
+            )
+        if inspection.ocr_result is not None:
+            return title_matches and (year_matches or not metadata.year)
+        return True
+
+    @staticmethod
+    def _unsupported_ocr_title_only_match(match, inspection, records) -> bool:
+        if match.method != "normalized_title" or match.confidence != "exact_title_only":
+            return False
+        record = next(
+            (item for item in records if item.row_number == match.matched_row_id), None
+        )
+        if record is None:
+            return False
+        target = normalize_title(record.get("title"))
+        ocr_titles = {
+            normalize_title(item.value)
+            for item in inspection.title_candidates
+            if item.source_type.startswith("ocr")
+        }
+        other_titles = {
+            normalize_title(item.value)
+            for item in inspection.title_candidates
+            if not item.source_type.startswith("ocr")
+        }
+        return target in ocr_titles and target not in other_titles
+
+    @staticmethod
+    def _add_ocr_report(file_result: dict[str, Any], inspection) -> None:
+        ocr = inspection.ocr_result
+        file_result.update(
+            {
+                "pypdf_text_available": inspection.pypdf_text_available,
+                "ocr_triggered": ocr is not None,
+                "ocr_trigger_reason": ocr.trigger_reason if ocr else None,
+                "ocr_status": ocr.status if ocr else "not_run",
+                "ocr_device": ocr.gpu_mode if ocr else None,
+                "ocr_dpi": ocr.dpi if ocr else None,
+                "ocr_cache_hit": ocr.cache_hit if ocr else False,
+                "ocr_title_candidates": [item.value for item in ocr.title_candidates[:5]] if ocr else [],
+                "ocr_doi_candidates": [item.value for item in ocr.doi_candidates] if ocr else [],
+                "ocr_pmid_candidates": [item.value for item in ocr.pmid_candidates] if ocr else [],
+                "ocr_warnings": list(ocr.warnings) if ocr else [],
+                "evidence_selected": inspection.text_extraction_method,
+            }
         )
 
     @staticmethod

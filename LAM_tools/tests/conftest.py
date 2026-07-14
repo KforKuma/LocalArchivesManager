@@ -9,6 +9,12 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 
 
+@pytest.fixture(autouse=True)
+def disable_real_ocr_by_default(monkeypatch):
+    """Default tests never initialize or download real OCR models."""
+    monkeypatch.setenv("OCR_ENABLED", "false")
+
+
 HEADERS = [
     "id",
     "title",

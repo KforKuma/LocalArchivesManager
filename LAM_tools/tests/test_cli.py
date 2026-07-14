@@ -40,6 +40,26 @@ def test_cli_register_help_and_max_files_validation(capsys):
     assert args.command == "register"
     assert args.max_files == 2
     assert args.filename_only is True
+    ocr_args = build_parser().parse_args(
+        [
+            "register",
+            "--ocr",
+            "always",
+            "--ocr-language",
+            "en",
+            "--ocr-language",
+            "ch_sim",
+            "--ocr-dpi",
+            "250",
+            "--ocr-gpu",
+            "false",
+        ]
+    )
+    assert ocr_args.ocr == "always"
+    assert ocr_args.ocr_languages == ["en", "ch_sim"]
+    assert ocr_args.ocr_dpi == 250
+    assert ocr_args.ocr_gpu == "false"
+    assert build_parser().parse_args(["doctor"]).command == "doctor"
 
 
 def test_cli_version_and_search_arguments(capsys):
@@ -48,7 +68,7 @@ def test_cli_version_and_search_arguments(capsys):
     with pytest.raises(SystemExit) as exit_info:
         build_parser().parse_args(["--version"])
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "0.3.1"
+    assert capsys.readouterr().out.strip() == "0.3.2"
 
     args = build_parser().parse_args(
         [

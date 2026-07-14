@@ -45,7 +45,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.3.0"
+    user_agent: str = "LAM/0.3.2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +101,26 @@ class DownloadConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OcrConfig:
+    enabled: bool = True
+    languages: tuple[str, ...] = ("en",)
+    dpi: int = 250
+    gpu: str = "auto"
+    model_storage_dir: Path | None = None
+    download_enabled: bool = False
+    poppler_path: Path | None = None
+    max_image_pixels: int = 25_000_000
+    timeout_seconds: float = 120.0
+    min_text_chars: int = 80
+    min_confidence: float = 0.30
+    max_files_per_run: int = 25
+    keep_debug_images: bool = False
+    preprocessing_mode: str = "raw"
+    cache_enabled: bool = True
+    configuration_version: str = "1"
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     library_root: Path
     project_root: Path
@@ -129,6 +149,8 @@ class Settings:
     cache: CacheConfig = field(default_factory=CacheConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     download_temp_dir: Path | None = None
+    ocr: OcrConfig = field(default_factory=OcrConfig)
+    ocr_cache_dir: Path | None = None
 
     @classmethod
     def from_root(cls, root: str | Path | None = None) -> "Settings":
@@ -149,7 +171,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.3.0").strip() or "LAM/0.3.0",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.3.2").strip() or "LAM/0.3.2",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
@@ -187,6 +209,39 @@ class Settings:
             verify_identifiers=_env_bool("DOWNLOAD_VERIFY_IDENTIFIERS", True),
             max_redirects=max(0, min(10, _env_int("DOWNLOAD_MAX_REDIRECTS", 5))),
         )
+        languages = tuple(
+            item.strip()
+            for item in os.getenv("OCR_LANGUAGES", "en").split(",")
+            if item.strip()
+        ) or ("en",)
+        gpu = os.getenv("OCR_GPU", "auto").strip().casefold() or "auto"
+        if gpu not in {"auto", "true", "false"}:
+            raise ConfigurationError("OCR_GPU must be auto, true, or false")
+        model_dir = os.getenv("OCR_MODEL_STORAGE_DIR", "").strip()
+        poppler_path = os.getenv("POPPLER_PATH", "").strip()
+        preprocessing = os.getenv("OCR_PREPROCESSING_MODE", "raw").strip().casefold()
+        if preprocessing not in {"raw", "grayscale_autocontrast"}:
+            raise ConfigurationError(
+                "OCR_PREPROCESSING_MODE must be raw or grayscale_autocontrast"
+            )
+        ocr = OcrConfig(
+            enabled=_env_bool("OCR_ENABLED", True),
+            languages=languages,
+            dpi=max(72, min(600, _env_int("OCR_DPI", 250))),
+            gpu=gpu,
+            model_storage_dir=Path(model_dir).expanduser().resolve() if model_dir else None,
+            download_enabled=_env_bool("OCR_DOWNLOAD_ENABLED", False),
+            poppler_path=Path(poppler_path).expanduser().resolve() if poppler_path else None,
+            max_image_pixels=max(1_000_000, _env_int("OCR_MAX_IMAGE_PIXELS", 25_000_000)),
+            timeout_seconds=max(1.0, _env_float("OCR_TIMEOUT_SECONDS", 120.0)),
+            min_text_chars=max(1, _env_int("OCR_MIN_TEXT_CHARS", 80)),
+            min_confidence=min(1.0, max(0.0, _env_float("OCR_MIN_CONFIDENCE", 0.30))),
+            max_files_per_run=max(1, _env_int("OCR_MAX_FILES_PER_RUN", 25)),
+            keep_debug_images=_env_bool("OCR_KEEP_DEBUG_IMAGES", False),
+            preprocessing_mode=preprocessing,
+            cache_enabled=_env_bool("OCR_CACHE_ENABLED", True),
+            configuration_version=os.getenv("OCR_CONFIGURATION_VERSION", "1").strip() or "1",
+        )
         return cls(
             library_root=library_root,
             project_root=project_root,
@@ -205,6 +260,8 @@ class Settings:
             unpaywall=unpaywall,
             download=download,
             download_temp_dir=library_root / ".library_state" / "tmp",
+            ocr=ocr,
+            ocr_cache_dir=library_root / ".library_state" / "ocr_cache",
         )
 
     def ensure_runtime_directories(self) -> None:

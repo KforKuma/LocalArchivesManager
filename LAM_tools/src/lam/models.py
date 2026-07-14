@@ -126,6 +126,85 @@ class TitleCandidate:
 
 
 @dataclass(slots=True)
+class OcrConfiguration:
+    languages: list[str] = field(default_factory=lambda: ["en"])
+    dpi: int = 250
+    gpu: str = "auto"
+    preprocessing_mode: str = "raw"
+    min_confidence: float = 0.30
+
+
+@dataclass(slots=True)
+class OcrAvailability:
+    available: bool
+    pdf2image_available: bool = False
+    poppler_available: bool = False
+    easyocr_available: bool = False
+    model_available: bool | None = None
+    torch_available: bool = False
+    cuda_available: bool = False
+    temporary_directory_writable: bool = False
+    status: str = "unavailable"
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class OcrTextBlock:
+    bounding_box: list[list[float]]
+    text: str
+    confidence: float
+    normalized_text: str = ""
+
+
+@dataclass(slots=True)
+class OcrInspection:
+    status: str = "not_run"
+    page_number: int = 1
+    image_width: int = 0
+    image_height: int = 0
+    dpi: int = 250
+    languages: list[str] = field(default_factory=list)
+    gpu_mode: str = "unavailable"
+    raw_blocks: list[OcrTextBlock] = field(default_factory=list)
+    ordered_lines: list[str] = field(default_factory=list)
+    combined_text: str = ""
+    title_candidates: list[TitleCandidate] = field(default_factory=list)
+    doi_candidates: list[IdentifierCandidate] = field(default_factory=list)
+    pmid_candidates: list[IdentifierCandidate] = field(default_factory=list)
+    year_candidates: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    duration_ms: int = 0
+    cache_hit: bool = False
+    trigger_reason: str = ""
+
+    def report_summary(self) -> dict[str, Any]:
+        confidences = [item.confidence for item in self.raw_blocks]
+        return {
+            "status": self.status,
+            "page_number": self.page_number,
+            "image_width": self.image_width,
+            "image_height": self.image_height,
+            "dpi": self.dpi,
+            "languages": self.languages,
+            "gpu_mode": self.gpu_mode,
+            "block_count": len(self.raw_blocks),
+            "mean_confidence": (
+                round(sum(confidences) / len(confidences), 4) if confidences else None
+            ),
+            "title_candidates": [item.value for item in self.title_candidates[:5]],
+            "doi_candidates": [item.value for item in self.doi_candidates],
+            "pmid_candidates": [item.value for item in self.pmid_candidates],
+            "year_candidates": self.year_candidates,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "duration_ms": self.duration_ms,
+            "cache_hit": self.cache_hit,
+            "trigger_reason": self.trigger_reason,
+        }
+
+
+@dataclass(slots=True)
 class PdfInspection:
     relative_path: str
     filename: str
@@ -150,6 +229,10 @@ class PdfInspection:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     cache_hit: bool = False
+    text_extraction_method: str = "metadata_only"
+    pypdf_text_available: bool = False
+    pypdf_result: dict[str, Any] = field(default_factory=dict)
+    ocr_result: OcrInspection | None = None
 
     def report_summary(self) -> dict[str, Any]:
         return {
@@ -168,6 +251,11 @@ class PdfInspection:
             "warnings": self.warnings,
             "errors": self.errors,
             "cache_hit": self.cache_hit,
+            "text_extraction_method": self.text_extraction_method,
+            "pypdf_text_available": self.pypdf_text_available,
+            "pypdf_result": self.pypdf_result,
+            "ocr_triggered": self.ocr_result is not None,
+            "ocr": self.ocr_result.report_summary() if self.ocr_result else None,
         }
 
 
@@ -200,6 +288,9 @@ class MetadataLookupRequest:
     refresh: bool = False
     offline: bool = False
     cache_write: bool = True
+    candidate_source: str | None = None
+    candidate_confidence: str | None = None
+    candidate_context: str | None = None
 
 
 @dataclass(slots=True)

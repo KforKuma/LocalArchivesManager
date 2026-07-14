@@ -470,6 +470,35 @@ then calls the replaceable Workflow 2 metadata service only when local evidence
 is insufficient. Provider results must be unique and high-confidence before a
 new catalogue row is created or registration continues.
 
+### First-page OCR fallback
+
+Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. In
+`--ocr auto` mode it renders and recognizes only page 1 when that evidence is
+empty, too short, abnormal, or lacks identification candidates. `--ocr never`
+disables OCR, while `--ocr always` performs one first-page pass for comparison.
+`--skip-pdf-text` and `--filename-only` disable all page-content extraction,
+including OCR.
+
+OCR uses `pdf2image` and Poppler for rendering and EasyOCR for recognition.
+Poppler, EasyOCR, or model unavailability is an OCR-specific state and must not
+be reported as PDF corruption. Model downloading is disabled during ordinary
+registration. Images are bounded, written only below
+`.library_state/tmp/<run_id>/ocr/`, and removed after use unless debug retention
+is explicitly enabled.
+
+OCR results preserve text boxes and confidence, are spatially ordered, and may
+add title, DOI, PMID, and year candidates. They do not lower the registration
+threshold: a fuzzy OCR title, a corrected DOI without independent support, or
+conflicting embedded-text/OCR evidence cannot authorize a move. OCR-derived
+identifiers with unique confirmation may proceed through the existing local
+match or Workflow 2 verification. Successful files still move only from
+`Inbox/` to `Registered/`; Workflow 4 is unchanged.
+
+OCR cache keys include the file fingerprint, page, engine/version, languages,
+DPI, preprocessing, and configuration version. Dry runs may read this cache but
+do not write it. Reports include only status, candidate summaries, confidence,
+warnings, and selected evidence—not the full recognized page text.
+
 ---
 
 ## Purpose

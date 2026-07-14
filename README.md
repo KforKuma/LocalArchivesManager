@@ -1,7 +1,7 @@
 # LAM — Local Archives Manager
 
 LAM provides deterministic local maintenance for a biomedical literature
-library stored alongside the source repository. Version 0.3.1 implements
+library stored alongside the source repository. Version 0.3.2 implements
 Workflow 1 (local reconciliation), Workflow 2 (network metadata lookup),
 Workflow 3 (Inbox identification and registration), and Workflow 4 (filing by
 the user-controlled `topic_folder`).
@@ -29,6 +29,10 @@ lam check --root D:\ResearchLibrary --json
 lam register --root D:\ResearchLibrary --dry-run
 lam register --root D:\ResearchLibrary --max-files 5
 lam register --root D:\ResearchLibrary --filename-only
+lam register --root D:\ResearchLibrary --ocr auto
+lam register --root D:\ResearchLibrary --ocr always --ocr-dpi 250 --dry-run
+lam register --root D:\ResearchLibrary --ocr never
+lam doctor --root D:\ResearchLibrary --json
 lam search --root D:\ResearchLibrary --pmid 34265844 --dry-run
 lam search --root D:\ResearchLibrary --doi 10.1038/s41586-021-03819-2 --dry-run
 lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --dry-run
@@ -56,6 +60,20 @@ dry run selects and reports a plan but does not request the PDF or create a
 temporary file. Use `--max-download-size MB`, `--download-timeout SECONDS`, or
 `--download-source {auto,arxiv,unpaywall}` to apply narrower bounds.
 
+Workflow 3 uses `pypdf` first and invokes EasyOCR only when the first-page text
+is missing, too short, abnormal, or lacks identification candidates. OCR is
+limited to page 1 and preserves bounding boxes and confidence. Its title and
+identifier output remains supporting evidence: fuzzy OCR titles and corrected
+DOIs do not independently authorize registration, and disagreement with the
+embedded PDF text is blocked for review. `--skip-pdf-text` and
+`--filename-only` disable both page-text extraction and OCR.
+
+`lam doctor` checks pdf2image, Poppler, EasyOCR, Torch/CUDA, local model
+availability, and temporary-directory access. EasyOCR model downloads are
+disabled by default (`OCR_DOWNLOAD_ENABLED=false`), so Workflow 3 never starts
+an implicit large download. If an explicit one-time initialization is desired,
+temporarily enable that setting and run `lam doctor`, then disable it again.
+
 ## Network configuration
 
 Copy `LAM_tools/.env.example` to `LAM_tools/.env` and configure at least:
@@ -65,10 +83,16 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.3.1
+HTTP_USER_AGENT=LAM/0.3.2
 DOWNLOAD_ENABLED=true
 DOWNLOAD_MAX_BYTES=157286400
 DOWNLOAD_TIMEOUT_SECONDS=120
+OCR_ENABLED=true
+OCR_LANGUAGES=en
+OCR_DPI=250
+OCR_GPU=auto
+OCR_DOWNLOAD_ENABLED=false
+POPPLER_PATH=
 ```
 
 LAM never prints these values. PubMed uses a minimum interval of 0.36 seconds
@@ -96,6 +120,7 @@ for no changes, `10` for configuration errors, `20` for catalogue errors,
 python -m pytest
 python -m pytest -m live
 python -m pytest -m live_download
+python -m pytest -m ocr_live
 ```
 
 Tests use temporary fixture libraries and do not touch the real catalogue or

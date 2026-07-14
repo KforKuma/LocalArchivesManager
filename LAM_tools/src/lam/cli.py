@@ -21,6 +21,7 @@ from .exceptions import (
 from .models import MetadataLookupRequest, WorkflowStatus
 from .workflows.catalogue_filing import CatalogueFilingWorkflow
 from .workflows.daily_check import DailyCheckWorkflow
+from .workflows.doctor import DoctorWorkflow
 from .workflows.inbox_register import InboxRegisterWorkflow
 from .workflows.metadata_query import MetadataQueryWorkflow
 
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--verbose", action="store_true", help="Verbose diagnostic logging")
     subparsers.add_parser("check", parents=[common], help="Run Workflow 1")
     subparsers.add_parser("file", parents=[common], help="Run Workflow 4")
+    subparsers.add_parser("doctor", parents=[common], help="Check OCR runtime availability")
     register = subparsers.add_parser("register", parents=[common], help="Run Workflow 3")
     register.add_argument("--max-files", type=int, help="Process only the first N Inbox PDFs")
     register.add_argument(
@@ -51,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use filenames and catalogue data without PDF page text",
     )
+    register.add_argument("--ocr", choices=("auto", "never", "always"), default="auto")
+    register.add_argument("--ocr-language", action="append", dest="ocr_languages")
+    register.add_argument("--ocr-dpi", type=int)
+    register.add_argument("--ocr-gpu", choices=("auto", "true", "false"))
     register.add_argument(
         "--skip-pdf-text",
         action="store_true",
@@ -104,20 +110,32 @@ def main(argv: list[str] | None = None) -> int:
         settings = Settings.from_root(args.root)
         _configure_logging(settings, args.verbose)
         lock = FileLock(settings.lock_path, timeout=0)
-        context = lock if (not args.dry_run or args.command == "search") else _NullContext()
+        context = (
+            lock
+            if args.command != "doctor" and (not args.dry_run or args.command == "search")
+            else _NullContext()
+        )
         with context:
             if args.command == "check":
                 result = DailyCheckWorkflow(settings).run(dry_run=args.dry_run)
             elif args.command == "file":
                 result = CatalogueFilingWorkflow(settings).run(dry_run=args.dry_run)
+            elif args.command == "doctor":
+                result = DoctorWorkflow(settings).run()
             elif args.command == "register":
                 if args.max_files is not None and args.max_files <= 0:
                     raise ConfigurationError("--max-files must be greater than zero")
+                if args.ocr_dpi is not None and not 72 <= args.ocr_dpi <= 600:
+                    raise ConfigurationError("--ocr-dpi must be between 72 and 600")
                 result = InboxRegisterWorkflow(settings).run(
                     dry_run=args.dry_run,
                     max_files=args.max_files,
                     filename_only=args.filename_only,
                     skip_pdf_text=args.skip_pdf_text,
+                    ocr_mode=args.ocr,
+                    ocr_languages=tuple(args.ocr_languages) if args.ocr_languages else None,
+                    ocr_dpi=args.ocr_dpi,
+                    ocr_gpu=args.ocr_gpu,
                 )
             else:
                 if not any(
