@@ -1,7 +1,7 @@
-# LAM tools
+# LAM — Local Archives Manager
 
-LAM (Local Archives Manager) provides deterministic local maintenance for the
-biomedical literature library in the parent directory. It implements Workflow 1
+LAM provides deterministic local maintenance for a biomedical literature
+library stored alongside the source repository. It implements Workflow 1
 (local catalogue/file reconciliation), Workflow 3 (Inbox identification and
 registration), and Workflow 4 (filing by the user-controlled `topic_folder`).
 It never accesses `summary.md`.
@@ -13,7 +13,7 @@ inventing metadata.
 
 ## Install
 
-From the `lam_agent` Conda environment:
+From the repository root, using the `lam_agent` Conda environment:
 
 ```powershell
 conda activate lam_agent
@@ -53,3 +53,21 @@ python -m pytest
 
 Tests use temporary fixture libraries and do not touch the real catalogue or
 PDF collection.
+
+## Repository layout
+
+```text
+ResearchLibrary/
+├── pyproject.toml
+├── README.md
+├── LAM_tools/
+│   ├── src/lam/
+│   └── tests/
+├── Inbox/          # local data; ignored by Git
+├── Registered/     # local data; ignored by Git
+└── catalogue.xlsx  # local data; ignored by Git
+```
+
+The root `.gitignore` excludes PDFs, catalogue files, snapshots, reports,
+runtime journals, local configuration, and IDE/cache artifacts so that Git
+updates contain project sources rather than private literature data.

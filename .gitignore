@@ -1,0 +1,32 @@
+# Local biomedical library data (never publish)
+/Inbox/
+/Registered/
+/.library_state/
+/catalogue.xlsx
+/catalogue.backup.*.xlsx
+/catalogue_pending_updates.csv
+/library_changes.md
+*.pdf
+summary.md
+
+# Local configuration and secrets
+.env
+LAM_tools/.env
+
+# Python/build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Editor and Codex-local state
+/.idea/
+/.agents/
+/.codex/
+
+# Temporary files and logs
+~$*.xlsx
+*.tmp
+*.log

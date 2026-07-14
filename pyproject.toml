@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lam-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Deterministic local maintenance tools for a biomedical literature library"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,9 +22,9 @@ dev = ["pytest>=8.0"]
 lam = "lam.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["LAM_tools/src"]
 
 [tool.pytest.ini_options]
 addopts = "-q -p no:cacheprovider"
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["LAM_tools/tests"]
+pythonpath = ["LAM_tools/src"]
