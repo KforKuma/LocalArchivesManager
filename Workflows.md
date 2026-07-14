@@ -447,6 +447,12 @@ Run only when explicitly requested by the user.
 
 A request to run Workflow 3 authorizes routine high-confidence renaming and movement from `Inbox/` to `Registered/`.
 
+The current phase-2 implementation processes only direct, non-hidden `.pdf`
+children of `Inbox/`. It uses bounded `pypdf` inspection and local catalogue
+matching. The metadata provider is deliberately unavailable in this phase and
+does not perform network requests; insufficient local evidence becomes a stable
+review item.
+
 ---
 
 ## Purpose
@@ -482,6 +488,11 @@ For each candidate file:
    - `uncertainty`, when needed.
 9. Rename the file.
 10. Move it to `Registered/`.
+
+Before applying ready operations, write a recoverable journal under
+`.library_state/runs/<run_id>/operation_journal.json`. Update it through
+`planned`, `file_moved`, `catalogue_committed`, and `final_check_committed`.
+Dry runs do not create a formal operation journal.
 
 Nested Workflow 2 calls do not run their own final Workflow 1 check.
 
@@ -646,11 +657,15 @@ A request to run Workflow 4 authorizes routine high-confidence file movements ba
 ## Purpose
 
 1. Compare intended `topic_folder` values with observed `pdf_relative_path` values.
-2. Move registered or misplaced PDFs into their confirmed topic folders.
+2. Move eligible PDFs directly from `Registered/` into their confirmed topic folders.
 3. Update location and lifecycle fields.
 4. Leave unresolved or unclassified files in `Registered/`.
 
 Workflow 4 handles location only.
+
+Workflow 4 must never move files from `Inbox/`. Files in `Inbox/` remain under
+Workflow 2/3 authority. Files already in topic folders are checked by Workflow 1
+but are not moved by Workflow 4.
 
 It must not:
 
@@ -721,17 +736,12 @@ Do not merge folders.
 
 ---
 
-## Misplaced files
+## Files outside Registered
 
-Workflow 4 may also correct a PDF that is already in a topic folder different from its confirmed `topic_folder`.
-
-This is a routine authorized move when:
-
-- the catalogue match is high confidence;
-- the target is unambiguous;
-- no overwrite risk exists.
-
-If any of these conditions fail, leave the file in place and record `NEEDS_REVIEW:`.
+Workflow 4 must not move a file whose observed location is outside `Registered/`.
+If a catalogue row points to `Inbox/`, another topic folder, or a management
+directory, leave the file in place and report the discrepancy for Workflow 1 or
+the appropriate registration workflow.
 
 ---
 
@@ -744,7 +754,7 @@ Catalogue rows checked:
 Files moved:
 Already correctly filed:
 Left in Registered:
-Misplaced files corrected:
+Files outside Registered skipped:
 
 ## Created folders
 
@@ -786,6 +796,16 @@ USER_CONFIRMED: field=topic_folder; value=T_cell; note=Keep this classification.
 do not repeatedly question that decision unless materially new conflicting evidence appears.
 
 Prefer one current concise review entry over multiple repetitive machine warnings.
+
+Maintain at most one active machine-generated `NEEDS_REVIEW:` blocker per
+catalogue row and field. While that blocker is unresolved, do not append newer
+versions of the same warning. Report active blockers once in the consolidated
+workflow report and continue unrelated safe rows.
+
+A matching `USER_CONFIRMED:` entry may use an empty `value=` and still resolves
+the blocker. If the user deliberately removes a previously snapshotted machine
+blocker, treat that removal as a one-time decision for the same evidence; do not
+immediately recreate it unless materially new evidence appears.
 
 ---
 

@@ -27,6 +27,7 @@ class DailyCheckWorkflow:
 
         previous_manifest = snapshots.load_manifest() if not initial else {}
         previous_catalogue = snapshots.load_catalogue_snapshot() if not initial else {}
+        catalogue.configure_review_state(previous_catalogue)
         before_catalogue = catalogue.snapshot_payload()
         current_manifest = snapshots.scan(previous_manifest)
         file_diffs, unchanged_count = (
@@ -120,19 +121,22 @@ class DailyCheckWorkflow:
         for record in catalogue.records:
             path_key = normalized_relative_path(record.get("pdf_relative_path"))
             candidates: list[tuple[str, FileSnapshot]] = []
-            if path_key and path_key in manifest:
+            filename_key = normalized_text(record.get("pdf_filename"))
+            filename_candidates = by_filename.get(filename_key, []) if filename_key else []
+            if len(filename_candidates) == 1:
+                candidates = filename_candidates
+            elif len(filename_candidates) > 1:
+                path_matches = [item for item in filename_candidates if item[0] == path_key]
+                candidates = path_matches if len(path_matches) == 1 else filename_candidates
+            elif path_key and path_key in manifest:
                 candidates = [(path_key, manifest[path_key])]
-            else:
-                filename_key = normalized_text(record.get("pdf_filename"))
-                if filename_key:
-                    candidates = by_filename.get(filename_key, [])
 
             if len(candidates) > 1:
-                catalogue.add_uncertainty(
+                outcome = catalogue.ensure_review_blocker(
                     record,
-                    "NEEDS_REVIEW:",
                     "pdf_file",
                     "Multiple local PDFs share the catalogue filename.",
+                    issue_key="multiple_filename_matches",
                 )
                 self._objective_update(
                     catalogue,
@@ -140,8 +144,10 @@ class DailyCheckWorkflow:
                     {"pdf_status": PdfStatus.UNCLEAR.value},
                     today,
                 )
-                result.needs_review.append(
-                    {"row": record.row_number, "issue": "multiple_filename_matches"}
+                self._record_review(
+                    result,
+                    outcome,
+                    {"row": record.row_number, "issue": "multiple_filename_matches"},
                 )
                 continue
 
@@ -155,11 +161,11 @@ class DailyCheckWorkflow:
                     PdfStatus.UNCLEAR.value,
                 }
                 if expects_file:
-                    catalogue.add_uncertainty(
+                    outcome = catalogue.ensure_review_blocker(
                         record,
-                        "NEEDS_REVIEW:",
                         "pdf_file",
                         "Catalogue expects a PDF but no local file was found.",
+                        issue_key="expected_pdf_missing",
                     )
                     self._objective_update(
                         catalogue,
@@ -167,8 +173,10 @@ class DailyCheckWorkflow:
                         {"pdf_status": PdfStatus.MISSING.value},
                         today,
                     )
-                    result.needs_review.append(
-                        {"row": record.row_number, "issue": "expected_pdf_missing"}
+                    self._record_review(
+                        result,
+                        outcome,
+                        {"row": record.row_number, "issue": "expected_pdf_missing"},
                     )
                 continue
 
@@ -186,20 +194,37 @@ class DailyCheckWorkflow:
                 today,
             )
             if mismatch:
-                catalogue.add_uncertainty(
+                issue = f"Observed location {item.relative_path!r} differs from topic_folder."
+                outcome = catalogue.ensure_review_blocker(
                     record,
-                    "NEEDS_REVIEW:",
                     "pdf_relative_path",
-                    f"Observed location {item.relative_path!r} differs from topic_folder.",
+                    issue,
+                    issue_key="topic_location_mismatch",
                 )
-                result.needs_review.append(
+                self._record_review(
+                    result,
+                    outcome,
                     {
                         "row": record.row_number,
                         "file": item.relative_path,
                         "issue": "topic_location_mismatch",
-                    }
+                    },
                 )
         return matched
+
+    @staticmethod
+    def _record_review(
+        result: WorkflowResult,
+        outcome: str,
+        item: dict[str, Any],
+    ) -> None:
+        if outcome in {"added", "existing"}:
+            if item not in result.needs_review:
+                result.needs_review.append(item)
+        else:
+            acknowledged = {**item, "reason": f"review_{outcome}"}
+            if acknowledged not in result.skipped:
+                result.skipped.append(acknowledged)
 
     @staticmethod
     def _objective_update(
@@ -253,4 +278,3 @@ class DailyCheckWorkflow:
         payload = asdict(item)
         payload["diff_type"] = item.diff_type.value
         return payload
-

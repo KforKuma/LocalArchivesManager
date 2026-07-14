@@ -10,6 +10,7 @@ from ..models import FileOperation, PdfStatus, WorkflowResult
 from ..services.catalogue_service import CatalogueService
 from ..services.file_service import FileService
 from ..services.report_service import ReportService, append_change_log
+from ..services.snapshot_service import SnapshotService
 from .daily_check import DailyCheckWorkflow
 
 
@@ -21,6 +22,11 @@ class CatalogueFilingWorkflow:
         result = WorkflowResult("catalogue_filing", dry_run=dry_run, mode="dry_run" if dry_run else "apply")
         catalogue = CatalogueService(self.settings.catalogue_path)
         records = catalogue.load()
+        snapshots = SnapshotService(self.settings.library_root, self.settings.state_dir)
+        previous_catalogue = (
+            snapshots.load_catalogue_snapshot() if snapshots.initialized else {}
+        )
+        catalogue.configure_review_state(previous_catalogue)
         files = FileService(self.settings.library_root, self.settings.max_filename_length)
         operations: list[FileOperation] = []
 
@@ -33,22 +39,68 @@ class CatalogueFilingWorkflow:
                 )
                 continue
             if not relative:
-                result.needs_review.append(
-                    {"row": record.row_number, "issue": "pdf_relative_path_missing"}
-                )
-                catalogue.add_uncertainty(
+                outcome = catalogue.ensure_review_blocker(
                     record,
-                    "NEEDS_REVIEW:",
                     "pdf_file",
                     "Cannot file because pdf_relative_path is blank.",
+                    issue_key="pdf_relative_path_missing",
+                )
+                self._record_review(
+                    result,
+                    outcome,
+                    {"row": record.row_number, "issue": "pdf_relative_path_missing"},
                 )
                 continue
             try:
                 target_folder = files.validate_topic_folder(topic)
                 source = files.require_within_root(self.settings.library_root / relative)
+                if not source.is_file():
+                    issue = f"Catalogue PDF path does not exist: {relative}"
+                    outcome = catalogue.ensure_review_blocker(
+                        record,
+                        "pdf_file",
+                        issue,
+                        issue_key="filing_source_missing",
+                    )
+                    self._record_review(
+                        result,
+                        outcome,
+                        {"row": record.row_number, "file": relative, "issue": "filing_source_missing"},
+                    )
+                    continue
                 if source.parent == target_folder:
                     result.skipped.append(
                         {"row": record.row_number, "file": relative, "reason": "already_filed"}
+                    )
+                    continue
+                if source.parent != self.settings.registered_dir.resolve():
+                    issue = "Workflow 4 only accepts PDFs directly from Registered."
+                    outcome = catalogue.ensure_review_blocker(
+                        record,
+                        "pdf_relative_path",
+                        issue,
+                        issue_key="source_not_registered",
+                        conflict_with_confirmation=True,
+                    )
+                    self._record_review(
+                        result,
+                        outcome,
+                        {"row": record.row_number, "file": relative, "issue": "source_not_registered"},
+                    )
+                    continue
+                if source.suffix.casefold() != ".pdf":
+                    issue = "Workflow 4 only accepts PDF files from Registered."
+                    outcome = catalogue.ensure_review_blocker(
+                        record,
+                        "pdf_file",
+                        issue,
+                        issue_key="source_not_pdf",
+                        conflict_with_confirmation=True,
+                    )
+                    self._record_review(
+                        result,
+                        outcome,
+                        {"row": record.row_number, "file": relative, "issue": "source_not_pdf"},
                     )
                     continue
                 operation = files.plan_move(
@@ -59,28 +111,31 @@ class CatalogueFilingWorkflow:
                 )
                 operations.append(operation)
             except FileOperationError as exc:
-                catalogue.add_uncertainty(
+                outcome = catalogue.ensure_review_blocker(
                     record,
-                    "NEEDS_REVIEW:",
                     "topic_folder",
                     str(exc),
+                    issue_key="unsafe_filing_target",
                     conflict_with_confirmation=True,
                 )
-                result.needs_review.append(
-                    {"row": record.row_number, "file": relative, "issue": str(exc)}
+                self._record_review(
+                    result,
+                    outcome,
+                    {"row": record.row_number, "file": relative, "issue": str(exc)},
                 )
 
         problems = files.validate_plan(operations)
         blocked_rows = {int(problem["row"]) for problem in problems}
         for problem in problems:
             row = next(record for record in records if record.row_number == int(problem["row"]))
-            catalogue.add_uncertainty(
+            issue = f"Filing collision: {problem['issue']} at {problem['target']}"
+            outcome = catalogue.ensure_review_blocker(
                 row,
-                "NEEDS_REVIEW:",
                 "pdf_file",
-                f"Filing collision: {problem['issue']} at {problem['target']}",
+                issue,
+                issue_key="filing_collision",
             )
-            result.needs_review.append(problem)
+            self._record_review(result, outcome, problem)
         safe_operations = [op for op in operations if op.catalogue_row not in blocked_rows]
 
         if dry_run:
@@ -165,6 +220,33 @@ class CatalogueFilingWorkflow:
             "report": final_check.report_path,
         }
         result.state_committed = final_check.state_committed
+        for item in final_check.needs_review:
+            if item not in result.needs_review:
+                result.needs_review.append(item)
+        for item in final_check.failures:
+            if item not in result.failures:
+                result.failures.append(item)
+        affected_rows = {change.row_number for change in catalogue.changes}
+        affected_rows.update(
+            item["row"]
+            for item in final_check.completed
+            if isinstance(item.get("row"), int)
+        )
+        result.changed_rows = len(affected_rows)
         result.finalize_status()
         ReportService(self.settings.reports_dir).write(result)
         return result
+
+    @staticmethod
+    def _record_review(
+        result: WorkflowResult,
+        outcome: str,
+        item: dict[str, Any],
+    ) -> None:
+        if outcome in {"added", "existing"}:
+            if item not in result.needs_review:
+                result.needs_review.append(item)
+        else:
+            acknowledged = {**item, "reason": f"review_{outcome}"}
+            if acknowledged not in result.skipped:
+                result.skipped.append(acknowledged)

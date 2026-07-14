@@ -35,6 +35,23 @@ class OperationType(StrEnum):
     CREATE_DIRECTORY = "create_directory"
 
 
+class MatchStatus(StrEnum):
+    EXACT = "exact"
+    HIGH_CONFIDENCE = "high_confidence"
+    AMBIGUOUS = "ambiguous"
+    NOT_FOUND = "not_found"
+    CONFLICT = "conflict"
+    BLOCKED = "blocked"
+
+
+class MetadataLookupStatus(StrEnum):
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class CatalogueRecord:
     row_number: int
@@ -81,12 +98,119 @@ class UncertaintyEntry:
 
 
 @dataclass(slots=True)
+class IdentifierCandidate:
+    value: str
+    page: int | None = None
+    line_or_context: str = ""
+    confidence: str = "medium"
+    source_type: str = "text"
+
+
+@dataclass(slots=True)
+class TitleCandidate:
+    value: str
+    confidence: str
+    source_type: str
+    page: int | None = None
+
+
+@dataclass(slots=True)
+class PdfInspection:
+    relative_path: str
+    filename: str
+    size: int
+    mtime_ns: int
+    is_readable: bool = False
+    is_encrypted: bool = False
+    page_count: int = 0
+    metadata_title: str = ""
+    metadata_author: str = ""
+    metadata_subject: str = ""
+    metadata_creator: str = ""
+    first_page_text: str = ""
+    second_page_text: str = ""
+    sampled_text: str = ""
+    doi_candidates: list[IdentifierCandidate] = field(default_factory=list)
+    pmid_candidates: list[IdentifierCandidate] = field(default_factory=list)
+    title_candidates: list[TitleCandidate] = field(default_factory=list)
+    year_candidates: list[str] = field(default_factory=list)
+    journal_candidates: list[str] = field(default_factory=list)
+    is_probable_supplement: bool = False
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    cache_hit: bool = False
+
+    def report_summary(self) -> dict[str, Any]:
+        return {
+            "relative_path": self.relative_path,
+            "filename": self.filename,
+            "size": self.size,
+            "mtime_ns": self.mtime_ns,
+            "is_readable": self.is_readable,
+            "is_encrypted": self.is_encrypted,
+            "page_count": self.page_count,
+            "doi_candidates": [item.value for item in self.doi_candidates],
+            "pmid_candidates": [item.value for item in self.pmid_candidates],
+            "title_candidates": [item.value for item in self.title_candidates[:5]],
+            "year_candidates": self.year_candidates,
+            "is_probable_supplement": self.is_probable_supplement,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "cache_hit": self.cache_hit,
+        }
+
+
+@dataclass(slots=True)
+class MatchResult:
+    status: MatchStatus
+    matched_row_id: int | None = None
+    matched_catalogue_id: str | None = None
+    confidence: str = "insufficient"
+    method: str = "none"
+    candidate_rows: list[int] = field(default_factory=list)
+    evidence: dict[str, Any] = field(default_factory=dict)
+    conflicts: list[str] = field(default_factory=list)
+    requires_metadata_lookup: bool = False
+    issue_key: str | None = None
+
+
+@dataclass(slots=True)
+class MetadataLookupRequest:
+    doi: str | None = None
+    pmid: str | None = None
+    title: str | None = None
+    authors: str | None = None
+    year: str | None = None
+    journal: str | None = None
+    source_pdf: str | None = None
+
+
+@dataclass(slots=True)
+class MetadataLookupResult:
+    status: MetadataLookupStatus
+    records: list[dict[str, Any]] = field(default_factory=list)
+    best_record: dict[str, Any] | None = None
+    confidence: str = "insufficient"
+    providers_used: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DocumentRecord:
+    document_type: str
+    parent_catalogue_id: str | None = None
+
+
+@dataclass(slots=True)
 class FileOperation:
     operation_type: OperationType
     source: Path | None
     target: Path
     catalogue_row: int
     reason: str
+    expected_size: int | None = None
+    expected_mtime_ns: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +219,8 @@ class FileOperation:
             "target": str(self.target),
             "catalogue_row": self.catalogue_row,
             "reason": self.reason,
+            "expected_size": self.expected_size,
+            "expected_mtime_ns": self.expected_mtime_ns,
         }
 
 

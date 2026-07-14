@@ -28,6 +28,14 @@ class Settings:
     changes_log_path: Path
     lock_path: Path
     max_filename_length: int = 180
+    pdf_max_pages: int = 3
+    pdf_max_chars_per_page: int = 12_000
+    pdf_max_total_chars: int = 30_000
+    pdf_title_min_length: int = 8
+    pdf_title_max_length: int = 300
+    inbox_recursive: bool = False
+    inspection_cache_enabled: bool = True
+    metadata_lookup_enabled: bool = False
 
     @classmethod
     def from_root(cls, root: str | Path | None = None) -> "Settings":
@@ -57,4 +65,3 @@ class Settings:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-

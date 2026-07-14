@@ -92,3 +92,48 @@ def test_unclassified_and_collision_are_left_in_place(library_factory):
     assert (root / "Registered" / "one.pdf").exists()
     assert (root / "Registered" / "two.pdf").exists()
     assert (root / "Topic_A" / "two.pdf").read_bytes().find(b"different") >= 0
+
+
+def test_inbox_pdf_is_never_filed_by_workflow4(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Inbox paper",
+                "topic_folder": "Topic_A",
+                "pdf_status": "inbox",
+                "pdf_filename": "paper.pdf",
+                "pdf_relative_path": "Inbox/paper.pdf",
+            }
+        ],
+        {"Inbox/paper.pdf": b"paper"},
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = CatalogueFilingWorkflow(settings).run(dry_run=True)
+    assert result.status == WorkflowStatus.NEEDS_REVIEW
+    assert not result.completed
+    assert (root / "Inbox" / "paper.pdf").exists()
+    assert not (root / "Topic_A").exists()
+
+
+def test_final_check_needs_review_overrides_no_changes(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Missing filed paper",
+                "topic_folder": "Topic_A",
+                "pdf_status": "filed",
+                "pdf_filename": "missing.pdf",
+                "pdf_relative_path": "Topic_A/missing.pdf",
+            }
+        ]
+    )
+    (root / "Topic_A").mkdir()
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = CatalogueFilingWorkflow(settings).run()
+    assert result.details["final_check"]["status"] == "needs_review"
+    assert result.status == WorkflowStatus.NEEDS_REVIEW
+    assert any(item.get("issue") == "expected_pdf_missing" for item in result.needs_review)

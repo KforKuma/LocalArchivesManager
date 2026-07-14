@@ -72,11 +72,14 @@ SNAPSHOT_FIELDS = (
 )
 
 RESERVED_DIRECTORIES = {
+    ".agents",
+    ".codex",
     ".git",
+    ".idea",
     ".library_state",
     "__pycache__",
     "inbox",
     "lam_tools",
     "registered",
+    "scripts",
 }
-

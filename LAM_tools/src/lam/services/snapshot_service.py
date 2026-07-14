@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
@@ -11,10 +12,19 @@ from typing import Any
 from ..exceptions import FileOperationError
 from ..models import DiffType, FileDiff, FileSnapshot
 from ..utils.hashing import quick_hash
-from ..utils.normalize import normalized_relative_path
+from ..utils.normalize import normalized_relative_path, normalized_text
 
 
-EXCLUDED_DIRECTORIES = {".git", ".library_state", "__pycache__", "lam_tools"}
+EXCLUDED_DIRECTORIES = {
+    ".agents",
+    ".codex",
+    ".git",
+    ".idea",
+    ".library_state",
+    "__pycache__",
+    "lam_tools",
+    "scripts",
+}
 
 
 class SnapshotService:
@@ -24,15 +34,26 @@ class SnapshotService:
         self.catalogue_snapshot_path = state_dir / "catalogue_snapshot.json"
         self.file_manifest_path = state_dir / "file_manifest.json"
         self.last_diff_path = state_dir / "last_diff.json"
+        self.commit_marker_path = state_dir / "snapshot_commit.json"
+        self.generations_dir = state_dir / "snapshot_generations"
 
     @property
     def initialized(self) -> bool:
+        if self.commit_marker_path.is_file():
+            generation_dir = self._active_generation_dir()
+            return all(
+                (generation_dir / name).is_file()
+                for name in ("catalogue_snapshot.json", "file_manifest.json", "last_diff.json")
+            )
+        if self.generations_dir.is_dir():
+            return False
         return self.catalogue_snapshot_path.is_file() and self.file_manifest_path.is_file()
 
     def load_manifest(self) -> dict[str, FileSnapshot]:
-        if not self.file_manifest_path.is_file():
+        path = self._active_path("file_manifest.json")
+        if not path.is_file():
             return {}
-        payload = self._load_json(self.file_manifest_path)
+        payload = self._load_json(path)
         entries = payload.get("files", [])
         return {
             normalized_relative_path(item["relative_path"]): FileSnapshot(**item)
@@ -40,9 +61,34 @@ class SnapshotService:
         }
 
     def load_catalogue_snapshot(self) -> dict[str, Any]:
-        if not self.catalogue_snapshot_path.is_file():
+        path = self._active_path("catalogue_snapshot.json")
+        if not path.is_file():
             return {}
-        return self._load_json(self.catalogue_snapshot_path)
+        return self._load_json(path)
+
+    def _active_path(self, filename: str) -> Path:
+        if self.commit_marker_path.is_file():
+            path = self._active_generation_dir() / filename
+            payload = self._load_json(path)
+            marker = self._load_json(self.commit_marker_path)
+            if payload.get("_state", {}).get("generation_id") != marker.get("generation_id"):
+                raise FileOperationError(f"State generation mismatch: {path}")
+            return path
+        if self.generations_dir.is_dir():
+            return self.generations_dir / "__no_committed_generation__" / filename
+        return self.state_dir / filename
+
+    def _active_generation_dir(self) -> Path:
+        marker = self._load_json(self.commit_marker_path)
+        generation_id = str(marker.get("generation_id") or "")
+        if not generation_id or Path(generation_id).name != generation_id:
+            raise FileOperationError("Invalid snapshot commit marker")
+        generation_dir = self.generations_dir / generation_id
+        if not generation_dir.is_dir():
+            raise FileOperationError(
+                f"Committed snapshot generation is missing: {generation_id}"
+            )
+        return generation_dir
 
     @staticmethod
     def _load_json(path: Path) -> dict[str, Any]:
@@ -87,7 +133,10 @@ class SnapshotService:
 
     def _excluded(self, path: Path) -> bool:
         relative_parts = path.relative_to(self.library_root).parts[:-1]
-        return any(part.casefold() in EXCLUDED_DIRECTORIES for part in relative_parts)
+        return any(
+            part.startswith(".") or part.casefold() in EXCLUDED_DIRECTORIES
+            for part in relative_parts
+        )
 
     def compare(
         self,
@@ -113,27 +162,36 @@ class SnapshotService:
 
         removed = {key: previous[key] for key in previous.keys() - current.keys()}
         added = {key: current[key] for key in current.keys() - previous.keys()}
-        removed_by_fingerprint: dict[tuple[int, str], list[str]] = defaultdict(list)
-        added_by_fingerprint: dict[tuple[int, str], list[str]] = defaultdict(list)
-        for key, item in removed.items():
-            removed_by_fingerprint[(item.size, item.quick_hash)].append(key)
-        for key, item in added.items():
-            added_by_fingerprint[(item.size, item.quick_hash)].append(key)
-
         matched_removed: set[str] = set()
         matched_added: set[str] = set()
-        for fingerprint in removed_by_fingerprint.keys() & added_by_fingerprint.keys():
-            old_keys = removed_by_fingerprint[fingerprint]
-            new_keys = added_by_fingerprint[fingerprint]
+        removed_by_filename: dict[str, list[str]] = defaultdict(list)
+        added_by_filename: dict[str, list[str]] = defaultdict(list)
+        for key, item in removed.items():
+            removed_by_filename[normalized_text(item.filename)].append(key)
+        for key, item in added.items():
+            added_by_filename[normalized_text(item.filename)].append(key)
+
+        for filename in removed_by_filename.keys() & added_by_filename.keys():
+            old_keys = removed_by_filename[filename]
+            new_keys = added_by_filename[filename]
             if len(old_keys) == 1 and len(new_keys) == 1:
                 old_key, new_key = old_keys[0], new_keys[0]
                 matched_removed.add(old_key)
                 matched_added.add(new_key)
+                old_item = removed[old_key]
+                new_item = added[new_key]
                 diffs.append(
                     FileDiff(
                         DiffType.MOVED_OR_RENAMED,
-                        old_path=removed[old_key].relative_path,
-                        new_path=added[new_key].relative_path,
+                        old_path=old_item.relative_path,
+                        new_path=new_item.relative_path,
+                        details={
+                            "matched_by": "filename",
+                            "content_changed": (
+                                old_item.size != new_item.size
+                                or old_item.quick_hash != new_item.quick_hash
+                            ),
+                        },
                     )
                 )
             else:
@@ -143,11 +201,41 @@ class SnapshotService:
                     FileDiff(
                         DiffType.POSSIBLE_COLLISION,
                         details={
+                            "matched_by": "filename",
                             "old_paths": [removed[key].relative_path for key in old_keys],
                             "new_paths": [added[key].relative_path for key in new_keys],
                         },
                     )
                 )
+
+        remaining_removed = {
+            key: item for key, item in removed.items() if key not in matched_removed
+        }
+        remaining_added = {
+            key: item for key, item in added.items() if key not in matched_added
+        }
+        removed_by_fingerprint: dict[tuple[int, str], list[str]] = defaultdict(list)
+        added_by_fingerprint: dict[tuple[int, str], list[str]] = defaultdict(list)
+        for key, item in remaining_removed.items():
+            removed_by_fingerprint[(item.size, item.quick_hash)].append(key)
+        for key, item in remaining_added.items():
+            added_by_fingerprint[(item.size, item.quick_hash)].append(key)
+        for fingerprint in removed_by_fingerprint.keys() & added_by_fingerprint.keys():
+            old_keys = removed_by_fingerprint[fingerprint]
+            new_keys = added_by_fingerprint[fingerprint]
+            matched_removed.update(old_keys)
+            matched_added.update(new_keys)
+            diffs.append(
+                FileDiff(
+                    DiffType.POSSIBLE_COLLISION,
+                    details={
+                        "matched_by": "quick_hash_candidate",
+                        "issue": "possible_rename_requires_review",
+                        "old_paths": [removed[key].relative_path for key in old_keys],
+                        "new_paths": [added[key].relative_path for key in new_keys],
+                    },
+                )
+            )
 
         for key, item in sorted(removed.items()):
             if key not in matched_removed:
@@ -192,13 +280,49 @@ class SnapshotService:
         diff_payload: dict[str, Any],
     ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        generated_at = datetime.now().astimezone().isoformat(timespec="microseconds")
+        generation_id = (
+            datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+            + "-"
+            + uuid.uuid4().hex[:8]
+        )
+        state_meta = {
+            "generation_id": generation_id,
+            "generated_at": generated_at,
+        }
+        catalogue_payload = {**catalogue_snapshot, "_state": state_meta}
         manifest_payload = {
             "version": 1,
             "files": [asdict(item) for _, item in sorted(manifest.items())],
+            "_state": state_meta,
         }
-        self._atomic_json(self.catalogue_snapshot_path, catalogue_snapshot)
+        diff_payload = {**diff_payload, "_state": state_meta}
+
+        generation_dir = self.generations_dir / generation_id
+        generation_dir.mkdir(parents=True, exist_ok=False)
+        payloads = {
+            "catalogue_snapshot.json": catalogue_payload,
+            "file_manifest.json": manifest_payload,
+            "last_diff.json": diff_payload,
+        }
+        for filename, payload in payloads.items():
+            self._atomic_json(generation_dir / filename, payload)
+        for filename in payloads:
+            validated = self._load_json(generation_dir / filename)
+            if validated.get("_state", {}).get("generation_id") != generation_id:
+                raise FileOperationError(
+                    f"Snapshot generation validation failed: {filename}"
+                )
+
+        # Canonical paths remain compatibility mirrors. The commit marker is
+        # switched last, so readers either see the complete old or new generation.
+        self._atomic_json(self.catalogue_snapshot_path, catalogue_payload)
         self._atomic_json(self.file_manifest_path, manifest_payload)
         self._atomic_json(self.last_diff_path, diff_payload)
+        self._atomic_json(
+            self.commit_marker_path,
+            {**state_meta, "files": sorted(payloads)},
+        )
 
     @staticmethod
     def _atomic_json(path: Path, payload: dict[str, Any]) -> None:

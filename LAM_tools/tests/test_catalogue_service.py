@@ -107,3 +107,65 @@ def test_rapid_successive_writes_never_overwrite_a_backup(library_factory):
     assert first_backup.exists()
     assert second_backup.exists()
     assert len(list(root.glob("catalogue.backup.*.xlsx"))) == 2
+
+
+def test_one_active_review_per_field_and_empty_confirmation_resolves_it(library_factory):
+    root = library_factory([{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}])
+    service = CatalogueService(root / "catalogue.xlsx")
+    record = service.load()[0]
+    first = service.ensure_review_blocker(
+        record, "pdf_file", "PDF missing", issue_key="missing"
+    )
+    second = service.ensure_review_blocker(
+        record, "pdf_file", "A newer missing message", issue_key="missing_new"
+    )
+    assert first == "added"
+    assert second == "existing"
+    assert str(record.get("uncertainty")).count("NEEDS_REVIEW:") == 1
+
+    service.update_fields(
+        record,
+        {
+            "uncertainty": (
+                str(record.get("uncertainty"))
+                + "\nUSER_CONFIRMED: field=pdf_file; value="
+            )
+        },
+    )
+    outcome = service.ensure_review_blocker(
+        record, "pdf_file", "PDF missing", issue_key="missing"
+    )
+    assert outcome == "confirmed"
+    assert "NEEDS_REVIEW:" not in str(record.get("uncertainty"))
+    assert "USER_CONFIRMED:" in str(record.get("uncertainty"))
+
+
+def test_user_cleared_review_is_remembered_by_snapshot(library_factory):
+    root = library_factory([{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}])
+    first = CatalogueService(root / "catalogue.xlsx")
+    record = first.load()[0]
+    first.ensure_review_blocker(record, "pdf_file", "PDF missing", issue_key="missing")
+    previous = first.snapshot_payload()
+    first.save_atomic()
+
+    workbook = load_workbook(root / "catalogue.xlsx")
+    workbook["Catalogue"]["M2"] = None
+    workbook.save(root / "catalogue.xlsx")
+
+    second = CatalogueService(root / "catalogue.xlsx")
+    record = second.load()[0]
+    second.configure_review_state(previous)
+    outcome = second.ensure_review_blocker(
+        record, "pdf_file", "PDF missing", issue_key="missing"
+    )
+    assert outcome == "cleared"
+    assert not record.get("uncertainty")
+
+
+def test_blank_bibliographic_field_can_be_filled_but_not_overwritten(library_factory):
+    root = library_factory([{"id": "P1", "title": "", "topic_folder": "Topic_A"}])
+    service = CatalogueService(root / "catalogue.xlsx")
+    record = service.load()[0]
+    service.update_fields(record, {"title": "Confirmed Title"})
+    with pytest.raises(CatalogueError, match="non-empty bibliographic"):
+        service.update_fields(record, {"title": "Conflicting Title"})

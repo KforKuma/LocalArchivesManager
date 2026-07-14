@@ -32,7 +32,11 @@ class ReportService:
 
     @staticmethod
     def _markdown(result: WorkflowResult) -> str:
-        title = "Daily library check" if result.workflow == "daily_check" else "Catalogue-based filing report"
+        title = {
+            "daily_check": "Daily library check",
+            "catalogue_filing": "Catalogue-based filing report",
+            "inbox_register": "Inbox registration report",
+        }.get(result.workflow, result.workflow)
         lines = [
             f"# {title}",
             "",

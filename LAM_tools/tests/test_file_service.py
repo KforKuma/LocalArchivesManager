@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
+import os
 
 import pytest
 
@@ -56,15 +58,64 @@ def test_all_operations_are_blocked_when_rows_share_a_target(library_factory):
         [],
         {
             "Registered/paper.pdf": b"source",
-            "Other/paper.pdf": b"other",
+            "Registered/other.pdf": b"other",
         },
     )
     service = FileService(root)
     target = root / "Topic_A"
-    operations = [
-        service.plan_move(root / "Registered" / "paper.pdf", target, 2, "test"),
-        service.plan_move(root / "Other" / "paper.pdf", target, 3, "test"),
-    ]
+    first = service.plan_move(root / "Registered" / "paper.pdf", target, 2, "test")
+    other = service.plan_move(root / "Registered" / "other.pdf", target, 3, "test")
+    operations = [first, replace(other, target=first.target)]
     problems = service.validate_plan(operations)
     assert {int(problem["row"]) for problem in problems} == {2, 3}
     assert {problem["issue"] for problem in problems} == {"multiple_rows_target_same_path"}
+
+
+def test_workflow4_source_must_be_registered_pdf(library_factory):
+    root = library_factory(
+        [],
+        {
+            "Inbox/paper.pdf": b"inbox",
+            "Registered/notes.txt": b"not pdf",
+        },
+    )
+    service = FileService(root)
+    with pytest.raises(FileOperationError, match="directly from Registered"):
+        service.plan_move(root / "Inbox" / "paper.pdf", root / "Topic_A", 2, "test")
+    with pytest.raises(FileOperationError, match="only moves PDF"):
+        service.plan_move(root / "Registered" / "notes.txt", root / "Topic_A", 3, "test")
+
+
+def test_target_created_after_planning_is_never_overwritten(library_factory):
+    root = library_factory([], {"Registered/paper.pdf": b"source"})
+    service = FileService(root)
+    operation = service.plan_move(
+        root / "Registered" / "paper.pdf", root / "Topic_A", 2, "test"
+    )
+    operation.target.parent.mkdir()
+    operation.target.write_bytes(b"late target")
+    with pytest.raises(FileOperationError, match="Refusing to overwrite"):
+        service.apply_move(operation)
+    assert operation.source.exists()
+    assert operation.target.read_bytes() == b"late target"
+
+
+def test_kernel_move_rejects_target_created_after_final_check(
+    library_factory, monkeypatch
+):
+    root = library_factory([], {"Registered/paper.pdf": b"source"})
+    service = FileService(root)
+    operation = service.plan_move(
+        root / "Registered" / "paper.pdf", root / "Topic_A", 2, "test"
+    )
+    real_rename = os.rename
+
+    def race_rename(source, target):
+        Path(target).write_bytes(b"racing target")
+        return real_rename(source, target)
+
+    monkeypatch.setattr("lam.services.file_service.os.rename", race_rename)
+    with pytest.raises(FileOperationError, match="Cannot move"):
+        service.apply_move(operation)
+    assert operation.source.exists()
+    assert operation.target.read_bytes() == b"racing target"

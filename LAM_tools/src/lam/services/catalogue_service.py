@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ from openpyxl import load_workbook
 from ..exceptions import CatalogueError
 from ..models import CatalogueChange, CatalogueRecord
 from ..schema import (
+    MACHINE_FILLABLE_FIELDS,
     MACHINE_MAINTAINED_FIELDS,
     PHASE1_REQUIRED_FIELDS,
     SNAPSHOT_FIELDS,
@@ -32,6 +34,7 @@ class CatalogueService:
         self.headers: dict[str, int] = {}
         self.records: list[CatalogueRecord] = []
         self.changes: list[CatalogueChange] = []
+        self.review_decisions: set[str] = set()
 
     def load(self) -> list[CatalogueRecord]:
         try:
@@ -126,11 +129,19 @@ class CatalogueService:
         for field_name, new_value in updates.items():
             if field_name in USER_CONTROLLED_FIELDS:
                 raise CatalogueError(f"Refusing to overwrite user-controlled field: {field_name}")
-            if field_name not in MACHINE_MAINTAINED_FIELDS:
-                raise CatalogueError(f"Phase 1 cannot update field: {field_name}")
+            if field_name not in MACHINE_MAINTAINED_FIELDS | MACHINE_FILLABLE_FIELDS:
+                raise CatalogueError(f"Workflow cannot update field: {field_name}")
             if field_name not in self.headers:
                 raise CatalogueError(f"Catalogue field is missing: {field_name}")
             old_value = record.get(field_name, None)
+            if (
+                field_name in MACHINE_FILLABLE_FIELDS
+                and old_value not in (None, "")
+                and not self._equivalent(old_value, new_value)
+            ):
+                raise CatalogueError(
+                    f"Refusing to overwrite non-empty bibliographic field: {field_name}"
+                )
             if self._equivalent(old_value, new_value):
                 continue
             column = self.headers[field_name]
@@ -155,17 +166,21 @@ class CatalogueService:
         issue: str,
         *,
         conflict_with_confirmation: bool = False,
+        issue_key: str | None = None,
     ) -> bool:
         if prefix not in UNCERTAINTY_PREFIXES:
             raise CatalogueError(f"Unsupported uncertainty prefix: {prefix}")
+        if prefix == "NEEDS_REVIEW:":
+            outcome = self.ensure_review_blocker(
+                record,
+                field_name,
+                issue,
+                issue_key=issue_key or "review",
+                conflict_with_confirmation=conflict_with_confirmation,
+            )
+            return outcome == "added"
         current = str(record.get("uncertainty") or "")
         lines = [line.rstrip() for line in current.splitlines() if line.strip()]
-        if (
-            prefix == "NEEDS_REVIEW:"
-            and not conflict_with_confirmation
-            and self._has_user_confirmation(lines, field_name)
-        ):
-            return False
         line = f"{prefix} field={field_name}; issue={issue}"
         normalized_line = normalized_text(line)
         if any(normalized_text(existing) == normalized_line for existing in lines):
@@ -173,6 +188,103 @@ class CatalogueService:
         lines.append(line)
         self.update_fields(record, {"uncertainty": "\n".join(lines)})
         return True
+
+    def ensure_review_blocker(
+        self,
+        record: CatalogueRecord,
+        field_name: str,
+        issue: str,
+        *,
+        issue_key: str,
+        conflict_with_confirmation: bool = False,
+    ) -> str:
+        """Return added, existing, confirmed, or cleared for one row/field blocker."""
+        current = str(record.get("uncertainty") or "")
+        lines = [line.rstrip() for line in current.splitlines() if line.strip()]
+        if not conflict_with_confirmation and self._has_user_confirmation(lines, field_name):
+            retained = [
+                line for line in lines if not self._is_review_for_field(line, field_name)
+            ]
+            if retained != lines:
+                self.update_fields(record, {"uncertainty": "\n".join(retained)})
+            return "confirmed"
+
+        decision_key = self._review_decision_key(record, field_name, issue_key, issue)
+        if decision_key in self.review_decisions:
+            return "cleared"
+        if any(self._is_review_for_field(line, field_name) for line in lines):
+            return "existing"
+
+        line = (
+            f"NEEDS_REVIEW: field={field_name}; issue_key={issue_key}; issue={issue}"
+        )
+        lines.append(line)
+        self.update_fields(record, {"uncertainty": "\n".join(lines)})
+        return "added"
+
+    def configure_review_state(self, previous_snapshot: dict[str, Any]) -> None:
+        """Carry approvals and treat a user-cleared blocker as a one-time decision."""
+        self.review_decisions.update(previous_snapshot.get("review_decisions", []))
+        old_rows = {
+            row.get("row_number"): row.get("fields", {})
+            for row in previous_snapshot.get("rows", [])
+        }
+        for record in self.records:
+            old_uncertainty = str(
+                old_rows.get(record.row_number, {}).get("uncertainty") or ""
+            )
+            current_lines = {
+                line.strip()
+                for line in str(record.get("uncertainty") or "").splitlines()
+                if line.strip()
+            }
+            for old_line in old_uncertainty.splitlines():
+                old_line = old_line.strip()
+                parsed = self._parse_review_line(old_line)
+                if not parsed or old_line in current_lines:
+                    continue
+                field_name, issue_key, issue = parsed
+                if any(self._is_review_for_field(line, field_name) for line in current_lines):
+                    continue
+                self.review_decisions.add(
+                    self._review_decision_key(
+                        record, field_name, issue_key, issue
+                    )
+                )
+
+    @staticmethod
+    def _parse_review_line(line: str) -> tuple[str, str, str] | None:
+        if not line.lstrip().upper().startswith("NEEDS_REVIEW:"):
+            return None
+        field_match = re.search(r"(?:NEEDS_REVIEW:|;)\s*field=([^;]+)", line, re.I)
+        issue_key_match = re.search(r"(?:^|;)\s*issue_key=([^;]+)", line, re.I)
+        issue_match = re.search(r"(?:^|;)\s*issue=(.*)$", line, re.I)
+        if not field_match or not issue_match:
+            return None
+        return (
+            field_match.group(1).strip(),
+            issue_key_match.group(1).strip() if issue_key_match else "review",
+            issue_match.group(1).strip(),
+        )
+
+    @classmethod
+    def _is_review_for_field(cls, line: str, field_name: str) -> bool:
+        parsed = cls._parse_review_line(line)
+        return bool(parsed and normalized_text(parsed[0]) == normalized_text(field_name))
+
+    @staticmethod
+    def _review_decision_key(
+        record: CatalogueRecord,
+        field_name: str,
+        issue_key: str,
+        issue: str,
+    ) -> str:
+        identity = record.get("id") or f"row:{record.row_number}"
+        payload = "|".join(
+            normalized_text(value)
+            for value in (identity, field_name, issue_key, issue)
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _has_user_confirmation(lines: Iterable[str], field_name: str) -> bool:
@@ -188,7 +300,11 @@ class CatalogueService:
                     "fields": {field: record.get(field, None) for field in SNAPSHOT_FIELDS},
                 }
             )
-        return {"sheet": self.worksheet.title if self.worksheet else None, "rows": rows}
+        return {
+            "sheet": self.worksheet.title if self.worksheet else None,
+            "rows": rows,
+            "review_decisions": sorted(self.review_decisions),
+        }
 
     def save_atomic(self) -> Path | None:
         if not self.changes:
