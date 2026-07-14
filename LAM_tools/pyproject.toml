@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lam-tools"
+version = "0.1.0"
+description = "Deterministic local maintenance tools for a biomedical literature library"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "filelock>=3.13",
+    "openpyxl>=3.1",
+    "pypdf>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+lam = "lam.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q -p no:cacheprovider"
+testpaths = ["tests"]
+pythonpath = ["src"]
