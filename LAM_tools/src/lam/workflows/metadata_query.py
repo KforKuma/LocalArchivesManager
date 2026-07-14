@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, replace
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from .. import __version__
@@ -17,6 +17,7 @@ from ..models import (
 )
 from ..schema import MACHINE_FILLABLE_FIELDS
 from ..services.catalogue_service import CatalogueService
+from ..services.download_service import DownloadService
 from ..services.journal_service import OperationJournal, incomplete_journals
 from ..services.metadata_service import CompositeMetadataLookupService
 from ..services.report_service import ReportService, append_change_log
@@ -32,9 +33,11 @@ class MetadataQueryWorkflow:
         self,
         settings: Settings,
         metadata_service: CompositeMetadataLookupService | None = None,
+        download_service: DownloadService | None = None,
     ):
         self.settings = settings
         self.metadata_service = metadata_service or CompositeMetadataLookupService(settings)
+        self.download_service = download_service or DownloadService(settings)
 
     def run(
         self,
@@ -46,6 +49,10 @@ class MetadataQueryWorkflow:
         missing_metadata: bool = False,
         max_records: int = 25,
         nested: bool = False,
+        download: bool = False,
+        download_source: str = "auto",
+        max_download_size_mb: float | None = None,
+        download_timeout: float | None = None,
     ) -> WorkflowResult:
         result = WorkflowResult(
             "metadata_query", dry_run=dry_run, mode="dry_run" if dry_run else "apply"
@@ -91,6 +98,8 @@ class MetadataQueryWorkflow:
         provider_summary: dict[str, dict[str, Any]] = {}
         cache_hits = 0
         cache_misses = 0
+        download_reports: list[dict[str, Any]] = []
+        download_journals: list[OperationJournal] = []
 
         lookups = (
             self.metadata_service.lookup_many([job for _, job in jobs])
@@ -223,6 +232,7 @@ class MetadataQueryWorkflow:
                         "canonical_id": metadata.canonical_id,
                     }
                     records_added.append(item)
+                    selected_target = new_record
                     result.completed.append(
                         {"action": "would_add" if dry_run else "added", **item}
                     )
@@ -237,6 +247,21 @@ class MetadataQueryWorkflow:
                         field="paper_identity",
                     )
                     query_report["catalogue_action"] = "blocked_low_confidence"
+                if download:
+                    download_report, journal, file_changed = self._process_download(
+                        catalogue,
+                        selected_target,
+                        metadata,
+                        result,
+                        dry_run=dry_run,
+                        source=download_source,
+                        max_download_size_mb=max_download_size_mb,
+                        timeout_seconds=download_timeout,
+                    )
+                    download_reports.append(download_report)
+                    if journal is not None:
+                        download_journals.append(journal)
+                    result.changed_files += int(file_changed)
             else:
                 self._handle_lookup_issue(catalogue, target, lookup, result, query_report)
 
@@ -259,7 +284,7 @@ class MetadataQueryWorkflow:
             "records_updated": records_updated,
             "records_unchanged": records_unchanged,
             "conflicts": conflicts,
-            "downloads": [],
+            "downloads": download_reports,
             "final_check": {},
             "network_failure": bool(result.failures),
         }
@@ -292,17 +317,25 @@ class MetadataQueryWorkflow:
                 result.catalogue_backup = str(backup)
             for row in changed_rows:
                 journal.set_operation_state(row, "catalogue_committed")
+
+        if catalogue.changes or result.changed_files:
             append_change_log(
                 self.settings.changes_log_path,
                 workflow="Workflow 2",
-                action="Metadata query and catalogue completion",
-                files_changed=0,
+                action="Metadata query, catalogue completion, and controlled OA download",
+                files_changed=result.changed_files,
                 catalogue_rows_changed=len(changed_rows),
-                reason="Added or completed high-confidence bibliographic metadata",
+                reason="Processed high-confidence metadata and explicitly authorized downloads",
                 uncertainty=f"{len(result.needs_review)} item(s) need review",
             )
 
-        if catalogue.changes and not nested:
+        for download_journal in download_journals:
+            for operation in download_journal.payload["operations"]:
+                download_journal.set_operation_state(
+                    operation.get("catalogue_row"), "catalogue_committed"
+                )
+
+        if (catalogue.changes or result.changed_files) and not nested:
             final_check = DailyCheckWorkflow(self.settings).run(
                 dry_run=False, final_check=True
             )
@@ -319,12 +352,168 @@ class MetadataQueryWorkflow:
                     result.failures.append(item)
             if journal:
                 journal.finish("final_check_committed")
+            for download_journal in download_journals:
+                download_journal.finish("final_check_committed")
         elif journal:
             journal.finish("catalogue_committed")
+            for download_journal in download_journals:
+                download_journal.finish("final_check_committed")
+        else:
+            for download_journal in download_journals:
+                download_journal.finish("final_check_committed")
 
         result.finalize_status()
         ReportService(self.settings.reports_dir).write(result)
         return result
+
+    def _process_download(
+        self,
+        catalogue: CatalogueService,
+        target: CatalogueRecord | None,
+        metadata: MetadataRecord,
+        result: WorkflowResult,
+        *,
+        dry_run: bool,
+        source: str,
+        max_download_size_mb: float | None,
+        timeout_seconds: float | None,
+    ) -> tuple[dict[str, Any], OperationJournal | None, bool]:
+        report: dict[str, Any] = {
+            "requested": True,
+            "catalogue_row": target.row_number if target else None,
+            "candidates": [
+                {
+                    "provider": item.provider,
+                    "url": self.download_service.safe_url(item.source_url),
+                    "priority": item.priority,
+                }
+                for item in metadata.download_candidates
+            ],
+        }
+        if not self.settings.download.enabled:
+            report.update(status="disabled", reason="download_disabled")
+            self._record_review(
+                catalogue,
+                target,
+                result,
+                "download_disabled",
+                "PDF download is disabled by configuration.",
+                field="pdf_download",
+            )
+            return report, None, False
+        candidate = self.download_service.select_candidate(
+            metadata.download_candidates, source=source
+        )
+        if candidate is None:
+            report.update(status="no_candidate", reason="no_legal_direct_pdf_candidate")
+            self._record_review(
+                catalogue,
+                target,
+                result,
+                "no_download_candidate",
+                "No explicit legal direct-PDF candidate was returned by arXiv or Unpaywall.",
+                field="pdf_download",
+            )
+            return report, None, False
+
+        run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f-download")
+        try:
+            plan = self.download_service.plan(
+                candidate,
+                run_id=run_id,
+                max_bytes=(
+                    max(1, int(max_download_size_mb * 1024 * 1024))
+                    if max_download_size_mb is not None
+                    else None
+                ),
+                timeout_seconds=timeout_seconds,
+            )
+        except ValueError as exc:
+            report.update(status="blocked", reason=str(exc))
+            self._record_review(
+                catalogue,
+                target,
+                result,
+                "unsafe_download_candidate",
+                str(exc),
+                field="pdf_download",
+            )
+            return report, None, False
+        report.update(
+            selected_provider=candidate.provider,
+            selected_url=self.download_service.safe_url(candidate.source_url),
+            selection_reason=candidate.selection_reason,
+            target=f"Inbox/{plan.target_filename}",
+            max_bytes=plan.max_bytes,
+            timeout_seconds=plan.timeout_seconds,
+        )
+        if dry_run:
+            report["status"] = "planned"
+            return report, None, False
+
+        operation = {
+            "catalogue_row": target.row_number if target else None,
+            "execution_state": "candidate_selected",
+            "provider": candidate.provider,
+            "source_url": self.download_service.safe_url(candidate.source_url),
+            "target": f"Inbox/{plan.target_filename}",
+        }
+        journal = OperationJournal.create(
+            self.settings.state_dir,
+            [operation],
+            workflow="metadata_query",
+            suffix="download",
+        )
+        row = target.row_number if target else None
+
+        def record_stage(stage: str, details: dict[str, object]) -> None:
+            journal.set_operation_state(row, stage, **details)
+
+        outcome = self.download_service.execute(plan, stage_callback=record_stage)
+        if outcome.status != "downloaded":
+            journal.set_operation_state(
+                row,
+                outcome.status,
+                error=outcome.error,
+            )
+        report.update(
+            status=outcome.status,
+            bytes_downloaded=outcome.bytes_downloaded,
+            content_type=outcome.content_type,
+            error=outcome.error,
+            validation=(asdict(outcome.validation) if outcome.validation else None),
+        )
+        if outcome.status in {"downloaded", "already_present"}:
+            if target is not None:
+                updates = {
+                    key: value
+                    for key, value in {
+                        "pdf_status": PdfStatus.INBOX.value,
+                        "pdf_filename": plan.target_filename,
+                        "pdf_relative_path": f"Inbox/{plan.target_filename}",
+                        "date_updated": date.today().isoformat(),
+                    }.items()
+                    if key in catalogue.headers
+                }
+                catalogue.update_fields(target, updates)
+            result.completed.append(
+                {
+                    "action": outcome.status,
+                    "row": row,
+                    "path": f"Inbox/{plan.target_filename}",
+                }
+            )
+            return report, journal, outcome.status == "downloaded"
+
+        self._record_review(
+            catalogue,
+            target,
+            result,
+            outcome.status,
+            outcome.error or "Downloaded payload did not pass controlled validation.",
+            field="pdf_download",
+        )
+        return report, journal, False
 
     @staticmethod
     def _targets(

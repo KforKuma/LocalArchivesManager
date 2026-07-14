@@ -1,7 +1,7 @@
 # LAM — Local Archives Manager
 
 LAM provides deterministic local maintenance for a biomedical literature
-library stored alongside the source repository. Version 0.3.0 implements
+library stored alongside the source repository. Version 0.3.1 implements
 Workflow 1 (local reconciliation), Workflow 2 (network metadata lookup),
 Workflow 3 (Inbox identification and registration), and Workflow 4 (filing by
 the user-controlled `topic_folder`).
@@ -35,6 +35,9 @@ lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --dry-run
 lam search --root D:\ResearchLibrary --row 25
 lam search --root D:\ResearchLibrary --missing-metadata --max-records 25
 lam search --root D:\ResearchLibrary --doi 10.1000/example --offline
+lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --download
+lam search --root D:\ResearchLibrary --doi 10.1000/example --download --download-source unpaywall
+lam search --root D:\ResearchLibrary --doi 10.1000/example --download --dry-run
 lam file --root D:\ResearchLibrary --dry-run
 lam file --root D:\ResearchLibrary --json
 ```
@@ -43,6 +46,15 @@ lam file --root D:\ResearchLibrary --json
 cache, but does not modify the catalogue, snapshots, files, change log, or
 operation journal. Add `--no-cache-write` for a fully read-only query, or
 `--offline` to use only valid cached responses.
+
+PDF transfer is separately opt-in through `search --download`. Eligible links
+are limited to official arXiv PDF links and explicit Unpaywall `url_for_pdf`
+locations. Downloads are streamed to `.library_state/tmp`, validated as a
+readable PDF with a matching DOI or arXiv identifier, and committed without
+overwrite to `Inbox/`. Query parameters are removed from reports. A download
+dry run selects and reports a plan but does not request the PDF or create a
+temporary file. Use `--max-download-size MB`, `--download-timeout SECONDS`, or
+`--download-source {auto,arxiv,unpaywall}` to apply narrower bounds.
 
 ## Network configuration
 
@@ -53,7 +65,10 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.3.0
+HTTP_USER_AGENT=LAM/0.3.1
+DOWNLOAD_ENABLED=true
+DOWNLOAD_MAX_BYTES=157286400
+DOWNLOAD_TIMEOUT_SECONDS=120
 ```
 
 LAM never prints these values. PubMed uses a minimum interval of 0.36 seconds
@@ -80,11 +95,12 @@ for no changes, `10` for configuration errors, `20` for catalogue errors,
 ```powershell
 python -m pytest
 python -m pytest -m live
+python -m pytest -m live_download
 ```
 
 Tests use temporary fixture libraries and do not touch the real catalogue or
-PDF collection. Live provider tests are excluded by default and make only a
-few exact, public queries when explicitly selected.
+PDF collection. Live provider and download tests are excluded by default and
+make only bounded, exact public requests when explicitly selected.
 
 ## Repository layout
 

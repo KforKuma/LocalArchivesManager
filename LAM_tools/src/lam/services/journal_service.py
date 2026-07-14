@@ -27,6 +27,9 @@ class OperationJournal:
             f"%Y%m%d-%H%M%S-%f-{suffix}"
         )
         path = state_dir / "runs" / run_id / "operation_journal.json"
+        for operation in operations:
+            state = operation.get("execution_state", "planned")
+            operation.setdefault("stages", [state])
         payload = {
             "run_id": run_id,
             "workflow": workflow,
@@ -42,12 +45,20 @@ class OperationJournal:
         for operation in self.payload["operations"]:
             if operation.get("catalogue_row") == catalogue_row:
                 operation["execution_state"] = state
+                stages = operation.setdefault("stages", [])
+                if not stages or stages[-1] != state:
+                    stages.append(state)
                 operation.update(details)
         self.payload["status"] = state
         self.write()
 
     def finish(self, status: str = "final_check_committed") -> None:
         self.payload["status"] = status
+        for operation in self.payload["operations"]:
+            operation["execution_state"] = status
+            stages = operation.setdefault("stages", [])
+            if not stages or stages[-1] != status:
+                stages.append(status)
         self.payload["finished_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
         self.write()
 

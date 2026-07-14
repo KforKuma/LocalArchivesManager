@@ -10,6 +10,7 @@ from ..http.client import HttpClient, HttpResult
 from ..http.rate_limiter import RateLimiter
 from ..http.retry import RetryPolicy
 from ..models import (
+    DownloadCandidate,
     MetadataLookupRequest,
     MetadataRecord,
     ProviderResult,
@@ -227,6 +228,21 @@ class ArxivProvider:
                 pdf_url=pdf_url,
                 landing_page_url=landing,
             )
+            if pdf_url:
+                record.download_candidates.append(
+                    DownloadCandidate(
+                        provider="arxiv",
+                        source_url=pdf_url,
+                        landing_page_url=landing,
+                        expected_doi=record.doi,
+                        expected_arxiv_id=arxiv_id,
+                        host_type="arxiv",
+                        version=raw_id,
+                        is_direct_pdf=True,
+                        priority=10,
+                        selection_reason="Official arXiv PDF link from the Atom record.",
+                    )
+                )
             record.provenance = provenance(record, "arxiv", raw_id, retrieved)
             records.append(record)
         return records

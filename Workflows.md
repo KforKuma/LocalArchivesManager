@@ -386,6 +386,23 @@ Downloaded files must enter:
 Inbox/
 ```
 
+Eligible download candidates are restricted to:
+
+1. the official PDF link returned by an arXiv Atom record;
+2. an explicit Unpaywall `url_for_pdf` location.
+
+Do not infer a direct PDF from a filename suffix and do not scrape a landing
+page for links. Stream the response into `.library_state/tmp/<run_id>/*.part`,
+enforce configured size and timeout limits, validate every redirect against
+public-address rules, then require a PDF signature, a readable document with at
+least one page, and a matching DOI or arXiv identifier. Commit to `Inbox/`
+without overwriting an existing different file. A same-content target is
+idempotent; a different-content target requires review.
+
+Download dry runs stop after candidate selection and planning. They must not
+request the PDF, create a `.part` file, modify the catalogue, write an operation
+journal, or commit snapshots.
+
 Workflow 2 must not:
 
 - rename downloaded PDFs into their final standard filename;

@@ -48,7 +48,7 @@ def test_cli_version_and_search_arguments(capsys):
     with pytest.raises(SystemExit) as exit_info:
         build_parser().parse_args(["--version"])
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "0.3.0"
+    assert capsys.readouterr().out.strip() == "0.3.1"
 
     args = build_parser().parse_args(
         [

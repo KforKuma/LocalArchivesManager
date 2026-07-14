@@ -276,6 +276,16 @@ class MetadataMergeService:
             key: value for record in ordered for key, value in record.source_ids.items()
         }
         merged.provenance = [item for record in ordered for item in record.provenance]
+        candidates = []
+        seen_candidates: set[tuple[str, str]] = set()
+        for record in ordered:
+            for candidate in record.download_candidates:
+                key = (candidate.provider, candidate.source_url)
+                if key in seen_candidates:
+                    continue
+                seen_candidates.add(key)
+                candidates.append(deepcopy(candidate))
+        merged.download_candidates = sorted(candidates, key=lambda item: item.priority)
         merged.is_preprint = any(record.is_preprint for record in ordered)
         merged.is_published = any(record.is_published for record in ordered)
         merged.canonical_id = (

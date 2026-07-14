@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lam-tools"
-version = "0.3.0"
+version = "0.3.1"
 description = "Deterministic local maintenance tools for a biomedical literature library"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,7 +27,10 @@ lam = "lam.cli:main"
 where = ["LAM_tools/src"]
 
 [tool.pytest.ini_options]
-addopts = "-q -p no:cacheprovider -m 'not live'"
+addopts = "-q -p no:cacheprovider -m 'not live and not live_download'"
 testpaths = ["LAM_tools/tests"]
 pythonpath = ["LAM_tools/src"]
-markers = ["live: optional real-network provider integration tests"]
+markers = [
+    "live: optional real-network provider integration tests",
+    "live_download: optional real-network open-access PDF download test",
+]

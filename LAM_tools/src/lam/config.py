@@ -90,6 +90,17 @@ class CacheConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DownloadConfig:
+    enabled: bool = True
+    max_bytes: int = 150 * 1024 * 1024
+    timeout_seconds: float = 120.0
+    chunk_size: int = 64 * 1024
+    keep_failed_parts: bool = False
+    verify_identifiers: bool = True
+    max_redirects: int = 5
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     library_root: Path
     project_root: Path
@@ -116,6 +127,8 @@ class Settings:
     arxiv: ArxivConfig = field(default_factory=ArxivConfig)
     unpaywall: UnpaywallConfig = field(default_factory=UnpaywallConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
+    download: DownloadConfig = field(default_factory=DownloadConfig)
+    download_temp_dir: Path | None = None
 
     @classmethod
     def from_root(cls, root: str | Path | None = None) -> "Settings":
@@ -165,6 +178,15 @@ class Settings:
                 100_000, max(1, _env_int("UNPAYWALL_DAILY_LIMIT", 100_000))
             ),
         )
+        download = DownloadConfig(
+            enabled=_env_bool("DOWNLOAD_ENABLED", True),
+            max_bytes=max(1, _env_int("DOWNLOAD_MAX_BYTES", 150 * 1024 * 1024)),
+            timeout_seconds=max(1.0, _env_float("DOWNLOAD_TIMEOUT_SECONDS", 120.0)),
+            chunk_size=max(4096, _env_int("DOWNLOAD_CHUNK_SIZE", 64 * 1024)),
+            keep_failed_parts=_env_bool("DOWNLOAD_KEEP_FAILED_PARTS", False),
+            verify_identifiers=_env_bool("DOWNLOAD_VERIFY_IDENTIFIERS", True),
+            max_redirects=max(0, min(10, _env_int("DOWNLOAD_MAX_REDIRECTS", 5))),
+        )
         return cls(
             library_root=library_root,
             project_root=project_root,
@@ -181,6 +203,8 @@ class Settings:
             pubmed=pubmed,
             arxiv=arxiv,
             unpaywall=unpaywall,
+            download=download,
+            download_temp_dir=library_root / ".library_state" / "tmp",
         )
 
     def ensure_runtime_directories(self) -> None:

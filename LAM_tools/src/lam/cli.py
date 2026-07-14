@@ -74,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--offline", action="store_true")
     search.add_argument("--refresh", action="store_true")
     search.add_argument("--no-cache-write", action="store_true")
+    search.add_argument("--download", action="store_true")
+    search.add_argument(
+        "--download-source",
+        choices=("auto", "arxiv", "unpaywall"),
+        default="auto",
+    )
+    search.add_argument("--max-download-size", type=float, metavar="MB")
+    search.add_argument("--download-timeout", type=float, metavar="SECONDS")
     return parser
 
 
@@ -130,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise ConfigurationError("--row must be an Excel row number of 2 or greater")
                 if args.max_results <= 0 or args.max_records <= 0:
                     raise ConfigurationError("--max-results and --max-records must be positive")
+                if args.max_download_size is not None and args.max_download_size <= 0:
+                    raise ConfigurationError("--max-download-size must be positive")
+                if args.download_timeout is not None and args.download_timeout <= 0:
+                    raise ConfigurationError("--download-timeout must be positive")
                 request = MetadataLookupRequest(
                     pmid=args.pmid,
                     doi=args.doi,
@@ -148,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
                     catalogue_id=args.catalogue_id,
                     missing_metadata=args.missing_metadata,
                     max_records=args.max_records,
+                    download=args.download,
+                    download_source=args.download_source,
+                    max_download_size_mb=args.max_download_size,
+                    download_timeout=args.download_timeout,
                 )
         payload = {
             "status": result.status.value,

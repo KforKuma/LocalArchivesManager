@@ -221,6 +221,56 @@ class MetadataConflict:
 
 
 @dataclass(slots=True)
+class DownloadCandidate:
+    provider: str
+    source_url: str
+    landing_page_url: str = ""
+    expected_doi: str = ""
+    expected_arxiv_id: str = ""
+    host_type: str = ""
+    license: str = ""
+    version: str = ""
+    is_direct_pdf: bool = False
+    priority: int = 100
+    selection_reason: str = ""
+
+
+@dataclass(slots=True)
+class DownloadPlan:
+    run_id: str
+    candidate: DownloadCandidate
+    target_filename: str
+    temporary_path: Path
+    final_path: Path
+    max_bytes: int
+    timeout_seconds: float
+    target_existed_at_plan: bool = False
+
+
+@dataclass(slots=True)
+class DownloadedFileInspection:
+    valid: bool
+    reasons: list[str] = field(default_factory=list)
+    page_count: int = 0
+    has_pdf_signature: bool = False
+    content_kind: str = "unknown"
+    identity_status: str = "not_checked"
+    identifiers_found: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class DownloadResult:
+    status: str
+    plan: DownloadPlan | None = None
+    bytes_downloaded: int = 0
+    content_type: str = ""
+    fingerprint: str = ""
+    validation: DownloadedFileInspection | None = None
+    final_path: str | None = None
+    error: str = ""
+
+
+@dataclass(slots=True)
 class MetadataRecord:
     canonical_id: str = ""
     title: str = ""
@@ -248,6 +298,7 @@ class MetadataRecord:
     pdf_url: str = ""
     landing_page_url: str = ""
     provenance: list[MetadataProvenance] = field(default_factory=list)
+    download_candidates: list[DownloadCandidate] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -258,6 +309,10 @@ class MetadataRecord:
         values["provenance"] = [
             item if isinstance(item, MetadataProvenance) else MetadataProvenance(**item)
             for item in values.get("provenance", [])
+        ]
+        values["download_candidates"] = [
+            item if isinstance(item, DownloadCandidate) else DownloadCandidate(**item)
+            for item in values.get("download_candidates", [])
         ]
         allowed = cls.__dataclass_fields__.keys()
         return cls(**{key: value for key, value in values.items() if key in allowed})

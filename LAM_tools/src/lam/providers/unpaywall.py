@@ -10,6 +10,7 @@ from ..http.client import HttpClient
 from ..http.rate_limiter import RateLimiter
 from ..http.retry import RetryPolicy
 from ..models import (
+    DownloadCandidate,
     MetadataLookupRequest,
     MetadataRecord,
     ProviderResult,
@@ -192,6 +193,33 @@ class UnpaywallProvider:
             pdf_url=pdf_url,
             landing_page_url=str(payload.get("doi_url") or "").strip(),
         )
+        candidates: list[DownloadCandidate] = []
+        seen_urls: set[str] = set()
+        ordered_locations = [best, *locations]
+        for index, location in enumerate(ordered_locations):
+            if not isinstance(location, dict):
+                continue
+            direct_url = str(location.get("url_for_pdf") or "").strip()
+            if not direct_url or direct_url in seen_urls:
+                continue
+            seen_urls.add(direct_url)
+            candidates.append(
+                DownloadCandidate(
+                    provider="unpaywall",
+                    source_url=direct_url,
+                    landing_page_url=str(
+                        location.get("url_for_landing_page") or location.get("url") or ""
+                    ).strip(),
+                    expected_doi=doi,
+                    host_type=str(location.get("host_type") or "").strip(),
+                    license=str(location.get("license") or "").strip(),
+                    version=str(location.get("version") or "").strip(),
+                    is_direct_pdf=True,
+                    priority=20 + index,
+                    selection_reason="Explicit Unpaywall url_for_pdf OA location.",
+                )
+            )
+        record.download_candidates = candidates
         retrieved = datetime.now().astimezone().isoformat(timespec="seconds")
         record.provenance = provenance(record, "unpaywall", doi, retrieved)
         return record
