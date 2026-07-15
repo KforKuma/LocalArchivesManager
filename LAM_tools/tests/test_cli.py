@@ -60,6 +60,23 @@ def test_cli_register_help_and_max_files_validation(capsys):
     assert ocr_args.ocr_dpi == 250
     assert ocr_args.ocr_gpu == "false"
     assert build_parser().parse_args(["doctor"]).command == "doctor"
+    repair = build_parser().parse_args(["repair-publication-types", "--dry-run"])
+    assert repair.command == "repair-publication-types"
+    assert repair.dry_run is True
+    normalize = build_parser().parse_args(["normalize-records", "--dry-run"])
+    assert normalize.command == "normalize-records"
+    assert normalize.dry_run is True
+    cleanup = build_parser().parse_args(["cleanup", "--dry-run"])
+    assert cleanup.command == "cleanup"
+    assert cleanup.dry_run is True
+    assert cleanup.apply is False
+
+
+def test_cli_cleanup_requires_explicit_mode(library_factory, capsys):
+    root = library_factory([])
+    assert main(["cleanup", "--root", str(root)]) == 10
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert "exactly one" in payload["error"]
 
 
 def test_cli_version_and_search_arguments(capsys):
@@ -68,7 +85,7 @@ def test_cli_version_and_search_arguments(capsys):
     with pytest.raises(SystemExit) as exit_info:
         build_parser().parse_args(["--version"])
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "0.3.2"
+    assert capsys.readouterr().out.strip() == "0.4.2"
 
     args = build_parser().parse_args(
         [
@@ -85,3 +102,8 @@ def test_cli_version_and_search_arguments(capsys):
     assert args.provider == "pubmed"
     assert args.offline is True
     assert args.no_cache_write is True
+    batch = build_parser().parse_args(
+        ["search", "--incomplete-records", "--normalize-existing"]
+    )
+    assert batch.incomplete_records is True
+    assert batch.normalize_existing is True

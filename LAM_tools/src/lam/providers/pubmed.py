@@ -20,6 +20,7 @@ from ..models import (
 )
 from ..services.metadata_cache_service import MetadataCacheService
 from ..utils.identifiers import normalize_doi, normalize_pmid
+from ..utils.publication_type import canonicalize_publication_type
 from ..utils.text import normalize_title
 from .common import (
     cache_provider_result,
@@ -345,6 +346,7 @@ class PubMedProvider:
                     for item in article.findall("PublicationTypeList/PublicationType")
                     if cls._text(item)
                 ]
+                canonical_type = canonicalize_publication_type(types)
                 record = MetadataRecord(
                     canonical_id=f"PMID:{pmid}",
                     title=cls._text(article.find("ArticleTitle")),
@@ -356,7 +358,8 @@ class PubMedProvider:
                     ),
                     doi=doi_values[0] if doi_values else "",
                     pmid=pmid,
-                    publication_type=types,
+                    publication_type=canonical_type.canonical_type,
+                    raw_publication_types=types,
                     abstract="\n\n".join(abstracts),
                     keywords=list(dict.fromkeys(keywords)),
                     mesh_terms=list(dict.fromkeys(mesh)),

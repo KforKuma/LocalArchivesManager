@@ -71,18 +71,22 @@ def test_all_operations_are_blocked_when_rows_share_a_target(library_factory):
     assert {problem["issue"] for problem in problems} == {"multiple_rows_target_same_path"}
 
 
-def test_workflow4_source_must_be_registered_pdf(library_factory):
+def test_workflow4_source_allows_registered_or_topic_pdf_only(library_factory):
     root = library_factory(
         [],
         {
             "Inbox/paper.pdf": b"inbox",
+            "Registered/registered.pdf": b"registered",
             "Registered/notes.txt": b"not pdf",
+            "Topic_A/filed.pdf": b"filed",
         },
     )
     service = FileService(root)
-    with pytest.raises(FileOperationError, match="directly from Registered"):
+    assert service.workflow4_source_kind(root / "Registered" / "registered.pdf") == "registered"
+    assert service.workflow4_source_kind(root / "Topic_A" / "filed.pdf") == "topic"
+    with pytest.raises(FileOperationError, match="refuses Inbox"):
         service.plan_move(root / "Inbox" / "paper.pdf", root / "Topic_A", 2, "test")
-    with pytest.raises(FileOperationError, match="only moves PDF"):
+    with pytest.raises(FileOperationError, match="not a PDF"):
         service.plan_move(root / "Registered" / "notes.txt", root / "Topic_A", 3, "test")
 
 

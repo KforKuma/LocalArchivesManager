@@ -5,6 +5,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from .utils.publication_type import CanonicalTypeResult, canonicalize_publication_type
+
 
 class PdfStatus(StrEnum):
     NOT_DOWNLOADED = "not_downloaded"
@@ -20,6 +22,8 @@ class DiffType(StrEnum):
     MISSING = "missing"
     MODIFIED = "modified"
     MOVED_OR_RENAMED = "moved_or_renamed"
+    EXPECTED_MOVE_OR_RENAME = "expected_move_or_rename"
+    QUICK_HASH_CANDIDATE = "quick_hash_candidate"
     POSSIBLE_COLLISION = "possible_collision"
 
 
@@ -30,8 +34,24 @@ class WorkflowStatus(StrEnum):
     FAILED = "failed"
 
 
+class InboxItemStatus(StrEnum):
+    REGISTERED = "registered"
+    PROVISIONAL = "provisional"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class InspectionLevel(StrEnum):
+    SKIP = "skip"
+    PYPDF_METADATA = "pypdf_metadata"
+    PYPDF_TEXT = "pypdf_text"
+    OCR = "ocr"
+
+
 class OperationType(StrEnum):
     MOVE = "move"
+    RENAME = "rename"
     CREATE_DIRECTORY = "create_directory"
 
 
@@ -123,6 +143,7 @@ class TitleCandidate:
     confidence: str
     source_type: str
     page: int | None = None
+    evidence: str = ""
 
 
 @dataclass(slots=True)
@@ -232,6 +253,7 @@ class PdfInspection:
     text_extraction_method: str = "metadata_only"
     pypdf_text_available: bool = False
     pypdf_result: dict[str, Any] = field(default_factory=dict)
+    local_metadata: dict[str, Any] = field(default_factory=dict)
     ocr_result: OcrInspection | None = None
 
     def report_summary(self) -> dict[str, Any]:
@@ -254,6 +276,12 @@ class PdfInspection:
             "text_extraction_method": self.text_extraction_method,
             "pypdf_text_available": self.pypdf_text_available,
             "pypdf_result": self.pypdf_result,
+            "local_metadata": {
+                key: value
+                for key, value in self.local_metadata.items()
+                if key not in {"abstract"}
+            },
+            "local_abstract_detected": bool(self.local_metadata.get("abstract")),
             "ocr_triggered": self.ocr_result is not None,
             "ocr": self.ocr_result.report_summary() if self.ocr_result else None,
         }
@@ -282,6 +310,8 @@ class MetadataLookupRequest:
     authors: str | None = None
     year: str | None = None
     journal: str | None = None
+    catalogue_id: str | None = None
+    user_confirmed_identity: bool = False
     source_pdf: str | None = None
     provider: str = "auto"
     max_results: int = 10
@@ -372,7 +402,8 @@ class MetadataRecord:
     doi: str = ""
     pmid: str = ""
     arxiv_id: str = ""
-    publication_type: list[str] = field(default_factory=list)
+    publication_type: str | None = None
+    raw_publication_types: list[str] = field(default_factory=list)
     abstract: str = ""
     keywords: list[str] = field(default_factory=list)
     mesh_terms: list[str] = field(default_factory=list)
@@ -397,6 +428,16 @@ class MetadataRecord:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "MetadataRecord":
         values = dict(payload)
+        legacy_type = values.get("publication_type")
+        raw_value = values.get("raw_publication_types") or []
+        raw_types = [raw_value] if isinstance(raw_value, str) else list(raw_value)
+        if isinstance(legacy_type, list):
+            raw_types = [*legacy_type, *raw_types]
+        elif legacy_type not in (None, ""):
+            raw_types = [legacy_type, *raw_types]
+        type_result = canonicalize_publication_type(raw_types)
+        values["publication_type"] = type_result.canonical_type
+        values["raw_publication_types"] = list(type_result.raw_types)
         values["provenance"] = [
             item if isinstance(item, MetadataProvenance) else MetadataProvenance(**item)
             for item in values.get("provenance", [])
@@ -409,7 +450,7 @@ class MetadataRecord:
         return cls(**{key: value for key, value in values.items() if key in allowed})
 
     def catalogue_fields(self) -> dict[str, Any]:
-        publication = "; ".join(self.publication_type)
+        publication = self.publication_type_result().canonical_type
         keywords = list(dict.fromkeys([*self.keywords, *self.mesh_terms]))
         return {
             "title": self.title,
@@ -425,6 +466,14 @@ class MetadataRecord:
             "auto_tags": "; ".join(self.categories),
             "source": "; ".join(self.source),
         }
+
+    def publication_type_result(self) -> CanonicalTypeResult:
+        primary = (
+            list(self.publication_type)
+            if isinstance(self.publication_type, (list, tuple, set))
+            else [self.publication_type]
+        )
+        return canonicalize_publication_type([*primary, *self.raw_publication_types])
 
 
 @dataclass(slots=True)

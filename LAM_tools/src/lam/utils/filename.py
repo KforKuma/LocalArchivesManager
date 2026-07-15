@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
+
+from .publication_type import canonicalize_publication_type
 
 
 WINDOWS_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -30,6 +33,63 @@ def sanitize_filename(filename: str, max_length: int = 180) -> str:
     return f"{stem or 'untitled'}{suffix.lower()}"
 
 
+@dataclass(frozen=True, slots=True)
+class StandardFilenameResult:
+    filename: str | None
+    publication_type: str | None
+    warnings: tuple[str, ...] = ()
+    title_truncated: bool = False
+
+
+def _sanitize_component(value: object) -> str:
+    text = WINDOWS_UNSAFE.sub("-", re.sub(r"\s+", " ", str(value or "")).strip())
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    return re.sub(r"-{2,}", "-", text)
+
+
+def standard_pdf_filename_result(
+    *,
+    title: object,
+    year: object,
+    journal_abbrev: object = "",
+    journal: object = "",
+    publication_type: object = "",
+    supplementary_material_type: object = "",
+    max_length: int = 180,
+) -> StandardFilenameResult:
+    clean_title = _sanitize_component(title)
+    clean_year = str(year or "").strip()
+    clean_journal = _sanitize_component(journal_abbrev or journal)
+    if not clean_title or not re.fullmatch(r"(?:19|20)\d{2}", clean_year) or not clean_journal:
+        return StandardFilenameResult(None, None)
+
+    type_result = canonicalize_publication_type(publication_type)
+    canonical_type = type_result.canonical_type
+    type_part = f", {canonical_type}" if canonical_type else ""
+    supplement = _sanitize_component(supplementary_material_type)
+    supplement_part = f" - {supplement}" if supplement else ""
+    prefix = f"{clean_journal}, {clean_year}{type_part} - "
+    suffix = f"{supplement_part}.pdf"
+    title_budget = max_length - len(prefix) - len(suffix)
+    if title_budget < 1:
+        warnings = tuple(dict.fromkeys((*type_result.warnings, "filename_prefix_too_long")))
+        return StandardFilenameResult(None, canonical_type, warnings)
+    title_truncated = len(clean_title) > title_budget
+    shortened_title = (
+        clean_title[:title_budget].rstrip(" .-")
+        if title_truncated
+        else clean_title.rstrip(" .-")
+    ) or clean_title[:1]
+    filename = f"{prefix}{shortened_title}{suffix}"
+    safe = sanitize_filename(filename, max_length=max_length)
+    return StandardFilenameResult(
+        safe,
+        canonical_type,
+        type_result.warnings,
+        title_truncated,
+    )
+
+
 def standard_pdf_filename(
     *,
     title: object,
@@ -37,19 +97,15 @@ def standard_pdf_filename(
     journal_abbrev: object = "",
     journal: object = "",
     publication_type: object = "",
+    supplementary_material_type: object = "",
     max_length: int = 180,
 ) -> str | None:
-    clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
-    clean_year = str(year or "").strip()
-    clean_journal = re.sub(
-        r"\s+", " ", str(journal_abbrev or journal or "")
-    ).strip()
-    if not clean_title or not re.fullmatch(r"(?:19|20)\d{2}", clean_year) or not clean_journal:
-        return None
-    publication = re.sub(r"\s+", " ", str(publication_type or "")).strip()
-    ordinary = {"", "article", "journal article", "research article"}
-    type_part = "" if publication.casefold() in ordinary else f", {publication}"
-    return sanitize_filename(
-        f"{clean_journal}, {clean_year}{type_part} - {clean_title}.pdf",
+    return standard_pdf_filename_result(
+        title=title,
+        year=year,
+        journal_abbrev=journal_abbrev,
+        journal=journal,
+        publication_type=publication_type,
+        supplementary_material_type=supplementary_material_type,
         max_length=max_length,
-    )
+    ).filename

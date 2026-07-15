@@ -71,17 +71,7 @@ class FileService:
         target_folder = self.require_within_root(target_folder)
         if not source.is_file():
             raise FileOperationError(f"Source PDF does not exist: {source}")
-        if source.parent != self.registered_dir:
-            raise FileOperationError(
-                f"Workflow 4 only moves PDFs directly from Registered: {source}"
-            )
-        if source.suffix.casefold() != ".pdf":
-            raise FileOperationError(f"Workflow 4 only moves PDF files: {source}")
-        safe_name = sanitize_filename(source.name, self.max_filename_length)
-        if safe_name != source.name:
-            raise FileOperationError(
-                f"Workflow 4 will not silently rename a non-standard filename: {source.name!r}"
-            )
+        self.workflow4_source_kind(source)
         target = self.require_within_root(target_folder / source.name)
         stat = source.stat()
         return FileOperation(
@@ -199,14 +189,111 @@ class FileService:
             )
         self._apply_no_replace(operation, "registration")
 
+    def plan_registered_rename(
+        self,
+        source: Path,
+        target_filename: str,
+        catalogue_row: int,
+        reason: str,
+    ) -> FileOperation:
+        source = self.require_within_root(source)
+        if not source.is_file() or source.parent != self.registered_dir:
+            raise FileOperationError(
+                f"Publication type repair only renames direct Registered PDFs: {source}"
+            )
+        if source.is_symlink() or self._is_reparse_point(source):
+            raise FileOperationError(f"Repair refuses symlinks or reparse points: {source}")
+        if source.suffix.casefold() != ".pdf":
+            raise FileOperationError(f"Repair only renames PDF files: {source}")
+        safe_name = sanitize_filename(target_filename, self.max_filename_length)
+        if safe_name != target_filename or Path(target_filename).name != target_filename:
+            raise FileOperationError(
+                f"Repair target filename is not already safe: {target_filename!r}"
+            )
+        target = self.require_within_root(self.registered_dir / target_filename)
+        stat = source.stat()
+        return FileOperation(
+            OperationType.RENAME,
+            source,
+            target,
+            catalogue_row,
+            reason,
+            expected_size=stat.st_size,
+            expected_mtime_ns=stat.st_mtime_ns,
+        )
+
+    def apply_registered_rename(self, operation: FileOperation) -> None:
+        source = operation.source
+        assert source is not None
+        self.require_within_root(source)
+        self.require_within_root(operation.target)
+        if source.parent != self.registered_dir or operation.target.parent != self.registered_dir:
+            raise FileOperationError("Repair rename must stay directly within Registered")
+        if source.suffix.casefold() != ".pdf" or operation.target.suffix.casefold() != ".pdf":
+            raise FileOperationError("Repair rename requires PDF source and target")
+        if source.is_symlink() or self._is_reparse_point(source):
+            raise FileOperationError(f"Repair source became a symlink or reparse point: {source}")
+        self._apply_no_replace(operation, "publication type repair")
+
     def apply_move(self, operation: FileOperation) -> None:
         source = operation.source
         assert source is not None
         self.require_within_root(source)
         self.require_within_root(operation.target)
-        if source.parent != self.registered_dir or source.suffix.casefold() != ".pdf":
-            raise FileOperationError(f"Move source is no longer an eligible Registered PDF: {source}")
+        self.workflow4_source_kind(source)
+        if operation.target.parent.parent != self.library_root:
+            raise FileOperationError(
+                f"Workflow 4 target is not a direct topic folder: {operation.target}"
+            )
+        self.validate_topic_folder(operation.target.parent.name)
         self._apply_no_replace(operation, "filing")
+
+    def workflow4_source_kind(self, source: Path) -> str:
+        source = self.require_within_root(source)
+        if not source.is_file() or source.suffix.casefold() != ".pdf":
+            raise FileOperationError(f"Workflow 4 source is not a PDF file: {source}")
+        if source.is_symlink() or self._is_reparse_point(source):
+            raise FileOperationError(
+                f"Workflow 4 refuses symlinks or reparse points: {source}"
+            )
+        if source.parent == self.registered_dir:
+            return "registered"
+        if source.parent == self.inbox_dir:
+            raise FileOperationError(f"Workflow 4 refuses Inbox sources: {source}")
+        parent = source.parent
+        if parent.parent != self.library_root:
+            raise FileOperationError(
+                f"Workflow 4 only accepts Registered or top-level topic PDFs: {source}"
+            )
+        name = parent.name
+        if (
+            name.startswith(".")
+            or normalized_reserved(name)
+            or parent.is_symlink()
+            or self._is_reparse_point(parent)
+        ):
+            raise FileOperationError(f"Workflow 4 source directory is managed or unsafe: {parent}")
+        return "topic"
+
+    def remove_empty_topic_directory(self, directory: Path) -> bool:
+        directory = self.require_within_root(directory)
+        if directory.parent != self.library_root:
+            return False
+        if (
+            directory.name.startswith(".")
+            or normalized_reserved(directory.name)
+            or directory.is_symlink()
+            or self._is_reparse_point(directory)
+        ):
+            return False
+        if not directory.is_dir():
+            return False
+        try:
+            next(directory.iterdir())
+            return False
+        except StopIteration:
+            directory.rmdir()
+            return True
 
     def _apply_no_replace(self, operation: FileOperation, label: str) -> None:
         source = operation.source

@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from filelock import FileLock, Timeout
@@ -20,10 +21,13 @@ from .exceptions import (
 )
 from .models import MetadataLookupRequest, WorkflowStatus
 from .workflows.catalogue_filing import CatalogueFilingWorkflow
+from .workflows.cleanup import CleanupWorkflow
 from .workflows.daily_check import DailyCheckWorkflow
 from .workflows.doctor import DoctorWorkflow
 from .workflows.inbox_register import InboxRegisterWorkflow
 from .workflows.metadata_query import MetadataQueryWorkflow
+from .workflows.publication_type_repair import PublicationTypeRepairWorkflow
+from .workflows.record_normalization import RecordNormalizationWorkflow
 
 
 EXIT_CODES = {
@@ -46,6 +50,27 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("check", parents=[common], help="Run Workflow 1")
     subparsers.add_parser("file", parents=[common], help="Run Workflow 4")
     subparsers.add_parser("doctor", parents=[common], help="Check OCR runtime availability")
+    cleanup = subparsers.add_parser(
+        "cleanup",
+        parents=[common],
+        help="Preview or apply allowlisted machine-file retention",
+    )
+    cleanup.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the cleanup plan; otherwise use --dry-run",
+    )
+    subparsers.add_parser(
+        "repair-publication-types",
+        parents=[common],
+        help="Normalize publication types and repair Registered filenames",
+    )
+    normalize_records = subparsers.add_parser(
+        "normalize-records",
+        parents=[common],
+        help="Canonicalize existing records by exact identifiers without moving PDFs",
+    )
+    normalize_records.add_argument("--max-records", type=int, default=1000)
     register = subparsers.add_parser("register", parents=[common], help="Run Workflow 3")
     register.add_argument("--max-files", type=int, help="Process only the first N Inbox PDFs")
     register.add_argument(
@@ -70,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--catalogue-id")
     search.add_argument("--row", type=int)
     search.add_argument("--missing-metadata", action="store_true")
+    search.add_argument("--incomplete-records", action="store_true")
+    search.add_argument("--normalize-existing", action="store_true")
     search.add_argument(
         "--provider",
         choices=("auto", "pubmed", "arxiv", "unpaywall"),
@@ -97,7 +124,12 @@ def _configure_logging(settings: Settings, verbose: bool) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         handlers=[
-            logging.FileHandler(settings.logs_dir / "lam.log", encoding="utf-8"),
+            RotatingFileHandler(
+                settings.logs_dir / "lam.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            ),
             logging.StreamHandler(sys.stderr),
         ],
         force=True,
@@ -122,6 +154,12 @@ def main(argv: list[str] | None = None) -> int:
                 result = CatalogueFilingWorkflow(settings).run(dry_run=args.dry_run)
             elif args.command == "doctor":
                 result = DoctorWorkflow(settings).run()
+            elif args.command == "cleanup":
+                if args.dry_run == args.apply:
+                    raise ConfigurationError(
+                        "cleanup requires exactly one of --dry-run or --apply"
+                    )
+                result = CleanupWorkflow(settings).run(dry_run=args.dry_run)
             elif args.command == "register":
                 if args.max_files is not None and args.max_files <= 0:
                     raise ConfigurationError("--max-files must be greater than zero")
@@ -137,6 +175,17 @@ def main(argv: list[str] | None = None) -> int:
                     ocr_dpi=args.ocr_dpi,
                     ocr_gpu=args.ocr_gpu,
                 )
+            elif args.command == "repair-publication-types":
+                result = PublicationTypeRepairWorkflow(settings).run(
+                    dry_run=args.dry_run
+                )
+            elif args.command == "normalize-records":
+                if args.max_records <= 0:
+                    raise ConfigurationError("--max-records must be positive")
+                result = RecordNormalizationWorkflow(settings).run(
+                    dry_run=args.dry_run,
+                    max_records=args.max_records,
+                )
             else:
                 if not any(
                     (
@@ -147,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
                         args.catalogue_id,
                         args.row is not None,
                         args.missing_metadata,
+                        args.incomplete_records,
+                        args.normalize_existing,
                     )
                 ):
                     raise ConfigurationError(
@@ -177,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
                     catalogue_row=args.row,
                     catalogue_id=args.catalogue_id,
                     missing_metadata=args.missing_metadata,
+                    incomplete_records=args.incomplete_records,
+                    normalize_existing=args.normalize_existing,
                     max_records=args.max_records,
                     download=args.download,
                     download_source=args.download_source,
@@ -196,8 +249,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(
             json.dumps(
-                result.to_dict() if args.json_output and args.command == "search" else payload,
-                ensure_ascii=False,
+                result.to_dict()
+                if args.json_output
+                and args.command
+                in {"search", "repair-publication-types", "normalize-records", "cleanup"}
+                else payload,
+                ensure_ascii=True,
                 default=str,
             )
         )
@@ -222,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _error(message: str, code: int) -> int:
-    print(json.dumps({"status": "failed", "error": message}, ensure_ascii=False))
+    print(json.dumps({"status": "failed", "error": message}, ensure_ascii=True))
     return code
 
 

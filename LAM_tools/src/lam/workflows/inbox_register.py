@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import re
 import json
 import os
-from datetime import date, datetime
+import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from ..config import Settings
-from ..exceptions import CatalogueError, FileOperationError
+from ..exceptions import FileOperationError
 from ..models import (
     CatalogueRecord,
-    FileOperation,
     IdentifierCandidate,
-    MatchStatus,
     MetadataLookupRequest,
-    MetadataLookupStatus,
     MetadataRecord,
     PdfStatus,
     WorkflowResult,
@@ -23,19 +20,12 @@ from ..models import (
 from ..providers.base import MetadataLookupService
 from ..providers.unavailable import UnavailableMetadataService
 from ..services.catalogue_service import CatalogueService
-from ..services.file_service import FileService
-from ..services.journal_service import OperationJournal, incomplete_journals
-from ..services.matching_service import MatchingService
 from ..services.metadata_service import CompositeMetadataLookupService
-from ..services.pdf_service import PdfService
-from ..services.report_service import ReportService, append_change_log
-from ..services.snapshot_service import SnapshotService
-from ..utils.filename import standard_pdf_filename
-from ..utils.normalize import normalized_relative_path
-from ..utils.identifiers import normalize_doi, normalize_pmid
+from ..utils.identifiers import normalize_arxiv_id, normalize_doi, normalize_pmid
+from ..utils.journal import journal_is_variant, journals_equivalent
 from ..utils.normalize import normalized_text
 from ..utils.text import normalize_title
-from .daily_check import DailyCheckWorkflow
+from ..utils.uncertainty import confirmation_for, confirmed_value
 
 
 class InboxRegisterWorkflow:
@@ -65,593 +55,27 @@ class InboxRegisterWorkflow:
         ocr_dpi: int | None = None,
         ocr_gpu: str | None = None,
     ) -> WorkflowResult:
-        result = WorkflowResult(
-            "inbox_register", dry_run=dry_run, mode="dry_run" if dry_run else "apply"
+        from .progressive_register import ProgressiveInboxRegisterWorkflow
+
+        return ProgressiveInboxRegisterWorkflow(self).run(
+            dry_run=dry_run,
+            max_files=max_files,
+            filename_only=filename_only,
+            skip_pdf_text=skip_pdf_text,
+            ocr_mode=ocr_mode,
+            ocr_languages=ocr_languages,
+            ocr_dpi=ocr_dpi,
+            ocr_gpu=ocr_gpu,
         )
-        catalogue = CatalogueService(self.settings.catalogue_path)
-        records = catalogue.load()
-        snapshots = SnapshotService(self.settings.library_root, self.settings.state_dir)
-        previous_catalogue = (
-            snapshots.load_catalogue_snapshot() if snapshots.initialized else {}
-        )
-        catalogue.configure_review_state(previous_catalogue)
-
-        for journal in incomplete_journals(self.settings.state_dir):
-            result.needs_review.append(
-                {**journal, "issue": "catalogue_write_incomplete"}
-            )
-
-        files = FileService(self.settings.library_root, self.settings.max_filename_length)
-        matcher = MatchingService()
-        pdfs = PdfService(self.settings, self.ocr_service)
-        ocr_run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f-register")
-        ocr_files = 0
-        discovered, skipped = self._discover_inbox()
-        result.skipped.extend(skipped)
-        if max_files is not None:
-            discovered = discovered[:max_files]
-
-        planned: list[dict[str, Any]] = []
-        file_results: list[dict[str, Any]] = []
-        metadata_requests = 0
-        for source in discovered:
-            relative = source.relative_to(self.settings.library_root).as_posix()
-            file_result: dict[str, Any] = {
-                "source_path": relative,
-                "inspection_status": "not_started",
-                "match_status": "not_found",
-                "matched_catalogue_id": None,
-                "match_method": "none",
-                "target_filename": None,
-                "target_path": None,
-                "action": "blocked",
-                "issue_keys": [],
-            }
-            file_results.append(file_result)
-            initial_match = matcher.match(
-                records,
-                relative_path=relative,
-                filename=source.name,
-            )
-            try:
-                inspection = pdfs.inspect(
-                    source,
-                    extract_text=not (filename_only or skip_pdf_text),
-                    ocr_mode=(
-                        "never"
-                        if filename_only or skip_pdf_text or ocr_files >= self.settings.ocr.max_files_per_run
-                        else ocr_mode
-                    ),
-                    ocr_languages=ocr_languages,
-                    ocr_dpi=ocr_dpi,
-                    ocr_gpu=ocr_gpu,
-                    run_id=ocr_run_id,
-                    ocr_cache_write=not dry_run,
-                )
-            except (OSError, ValueError) as exc:
-                self._block(
-                    catalogue,
-                    self._record_for_match(records, initial_match.matched_row_id),
-                    result,
-                    file_result,
-                    "source_changed_during_run",
-                    f"Inbox PDF became unavailable before inspection: {exc}",
-                    file=relative,
-                )
-                continue
-            file_result["inspection_status"] = (
-                "readable" if inspection.is_readable else "unreadable"
-            )
-            file_result["inspection"] = inspection.report_summary()
-            if inspection.ocr_result is not None:
-                ocr_files += 1
-            self._add_ocr_report(file_result, inspection)
-
-            known_record = self._record_for_match(records, initial_match.matched_row_id)
-            try:
-                current_stat = source.stat()
-            except OSError:
-                self._block(
-                    catalogue,
-                    known_record,
-                    result,
-                    file_result,
-                    "source_changed_during_run",
-                    "Inbox PDF disappeared while it was being inspected.",
-                    file=relative,
-                )
-                continue
-            if (
-                current_stat.st_size != inspection.size
-                or current_stat.st_mtime_ns != inspection.mtime_ns
-            ):
-                self._block(
-                    catalogue,
-                    known_record,
-                    result,
-                    file_result,
-                    "source_changed_during_run",
-                    "Inbox PDF changed while it was being inspected.",
-                    file=relative,
-                )
-                continue
-            if not inspection.is_readable:
-                issue_key = (
-                    "pdf_encrypted"
-                    if "pdf_encrypted" in inspection.errors
-                    else "pdf_unreadable"
-                )
-                self._block(
-                    catalogue,
-                    known_record,
-                    result,
-                    file_result,
-                    issue_key,
-                    "PDF cannot be read safely.",
-                    file=relative,
-                )
-                continue
-            if "pdf_text_ocr_conflict" in inspection.warnings:
-                self._block(
-                    catalogue,
-                    known_record,
-                    result,
-                    file_result,
-                    "pdf_text_ocr_conflict",
-                    "The embedded PDF text and first-page OCR point to conflicting evidence.",
-                    file=relative,
-                )
-                continue
-            if not filename_only and not skip_pdf_text and "text_unavailable" in inspection.warnings:
-                ocr = inspection.ocr_result
-                has_ocr_evidence = bool(
-                    ocr
-                    and ocr.status == "success"
-                    and (ocr.title_candidates or ocr.doi_candidates or ocr.pmid_candidates)
-                )
-                if not has_ocr_evidence:
-                    issue_key = (
-                        "ocr_max_files_per_run"
-                        if ocr is None
-                        and ocr_mode != "never"
-                        and ocr_files >= self.settings.ocr.max_files_per_run
-                        else ocr.status
-                        if ocr is not None and ocr.status != "success"
-                        else "pdf_text_unavailable"
-                    )
-                    self._block(
-                        catalogue,
-                        known_record,
-                        result,
-                        file_result,
-                        issue_key,
-                        "Neither the PDF text layer nor first-page OCR supplied sufficient identification evidence.",
-                        file=relative,
-                    )
-                    continue
-
-            match = initial_match if filename_only else matcher.match(
-                records,
-                relative_path=relative,
-                filename=source.name,
-                inspection=inspection,
-            )
-            if match.status in {MatchStatus.AMBIGUOUS, MatchStatus.CONFLICT}:
-                confirmed_id = self._confirmed_identity(records, match.candidate_rows)
-                if confirmed_id:
-                    match = matcher.match(
-                        records,
-                        relative_path=relative,
-                        filename=source.name,
-                        inspection=inspection,
-                        confirmed_catalogue_id=confirmed_id,
-                    )
-            if self._unsupported_ocr_title_only_match(match, inspection, records):
-                match.status = MatchStatus.NOT_FOUND
-                match.confidence = "insufficient"
-                match.method = "none"
-                match.requires_metadata_lookup = True
-                match.issue_key = "ocr_title_requires_support"
-
-            file_result["match_status"] = match.status.value
-            file_result["matched_catalogue_id"] = match.matched_catalogue_id
-            file_result["match_method"] = match.method
-            record = self._record_for_match(records, match.matched_row_id)
-            if match.status not in {MatchStatus.EXACT, MatchStatus.HIGH_CONFIDENCE}:
-                issue_key = match.issue_key or "paper_identity_not_found"
-                if match.requires_metadata_lookup:
-                    metadata_requests += 1
-                    lookup_request = self._lookup_request(inspection, relative)
-                    lookup = self.metadata_service.lookup(lookup_request)
-                    file_result["metadata_lookup_status"] = lookup.status.value
-                    file_result["metadata_providers"] = lookup.providers_used
-                    file_result["metadata_selection_reason"] = lookup.selection_reason
-                    if (
-                        lookup.status == MetadataLookupStatus.FOUND
-                        and lookup.best_record
-                        and lookup.confidence in {"exact_identifier", "exact_title_supported"}
-                    ):
-                        metadata = MetadataRecord.from_dict(lookup.best_record)
-                        if not self._metadata_supports_inspection(metadata, inspection):
-                            self._block(
-                                catalogue,
-                                record,
-                                result,
-                                file_result,
-                                "ocr_provider_evidence_conflict",
-                                "Workflow 2 metadata does not confirm the local PDF/OCR evidence.",
-                                file=relative,
-                                field_name="paper_identity",
-                            )
-                            continue
-                        candidates = self._metadata_catalogue_candidates(records, metadata)
-                        if len(candidates) > 1:
-                            self._block(
-                                catalogue,
-                                None,
-                                result,
-                                file_result,
-                                "metadata_query_ambiguous",
-                                "Provider metadata matches multiple catalogue rows.",
-                                file=relative,
-                                field_name="metadata_query_ambiguous",
-                            )
-                            continue
-                        if candidates:
-                            record = candidates[0]
-                            updates, metadata_conflicts = self._metadata_updates(
-                                catalogue, record, metadata
-                            )
-                            if metadata_conflicts:
-                                self._block(
-                                    catalogue,
-                                    record,
-                                    result,
-                                    file_result,
-                                    "catalogue_existing_value_conflict",
-                                    "; ".join(metadata_conflicts),
-                                    file=relative,
-                                    field_name="metadata",
-                                )
-                                continue
-                            if updates:
-                                catalogue.update_fields(record, updates)
-                        else:
-                            if not self._eligible_provider_record(metadata):
-                                self._block(
-                                    catalogue,
-                                    None,
-                                    result,
-                                    file_result,
-                                    "metadata_query_ambiguous",
-                                    "Provider result is not sufficient for a durable catalogue row.",
-                                    file=relative,
-                                    field_name="metadata_query_ambiguous",
-                                )
-                                continue
-                            record = catalogue.add_record(
-                                self._metadata_row_values(
-                                    catalogue, metadata, source.name, relative
-                                )
-                            )
-                        file_result["match_status"] = MatchStatus.EXACT.value
-                        file_result["matched_catalogue_id"] = record.get("id")
-                        file_result["match_method"] = "workflow2_provider"
-                    else:
-                        issue_key = {
-                            MetadataLookupStatus.NOT_FOUND: "metadata_query_not_found",
-                            MetadataLookupStatus.AMBIGUOUS: "metadata_query_ambiguous",
-                            MetadataLookupStatus.CONFLICT: "metadata_cross_provider_conflict",
-                            MetadataLookupStatus.UNAVAILABLE: "metadata_provider_unavailable",
-                            MetadataLookupStatus.FAILED: "metadata_provider_failed",
-                        }.get(lookup.status, "metadata_query_ambiguous")
-                        self._block(
-                            catalogue,
-                            record,
-                            result,
-                            file_result,
-                            issue_key,
-                            lookup.selection_reason
-                            or "; ".join(lookup.errors)
-                            or "Metadata lookup did not produce a unique high-confidence result.",
-                            file=relative,
-                            field_name=issue_key,
-                        )
-                        continue
-                else:
-                    self._block(
-                        catalogue,
-                        record,
-                        result,
-                        file_result,
-                        issue_key,
-                        "; ".join(match.conflicts) or "Paper identity requires review.",
-                        file=relative,
-                    )
-                    continue
-            if record is None:
-                self._block(
-                    catalogue,
-                    record,
-                    result,
-                    file_result,
-                    "paper_identity_not_found",
-                    "Paper identity could not be attached to a catalogue row.",
-                    file=relative,
-                )
-                continue
-
-            if inspection.is_probable_supplement:
-                self._block(
-                    catalogue,
-                    record,
-                    result,
-                    file_result,
-                    "supplement_parent_unknown",
-                    "Phase 2 does not store supplementary files in the single main-PDF fields.",
-                    file=relative,
-                )
-                continue
-            current_path = normalized_relative_path(record.get("pdf_relative_path"))
-            if current_path and current_path != normalized_relative_path(relative):
-                issue_key = (
-                    "multiple_local_files_for_single_row"
-                    if not inspection.is_probable_supplement
-                    else "supplement_parent_unknown"
-                )
-                self._block(
-                    catalogue,
-                    record,
-                    result,
-                    file_result,
-                    issue_key,
-                    "Catalogue row already points to another local PDF.",
-                    file=relative,
-                )
-                continue
-
-            confirmed_title = self._confirmed_value(record, "title")
-            confirmed_year = self._confirmed_value(record, "publication_year")
-            confirmed_journal = self._confirmed_value(record, "journal")
-            naming_title = record.get("title") or confirmed_title
-            naming_year = record.get("year") or confirmed_year
-            naming_journal = record.get("journal") or confirmed_journal
-            target_filename = standard_pdf_filename(
-                title=naming_title,
-                year=naming_year,
-                journal_abbrev=record.get("journal_abbrev"),
-                journal=naming_journal,
-                publication_type=record.get("publication_type"),
-                max_length=self.settings.max_filename_length,
-            )
-            if not target_filename:
-                missing_field = (
-                    "title"
-                    if not naming_title
-                    else "publication_year"
-                    if not naming_year
-                    else "journal"
-                )
-                self._block(
-                    catalogue,
-                    record,
-                    result,
-                    file_result,
-                    "required_naming_metadata_missing",
-                    "Registration requires title, year, and journal or journal_abbrev.",
-                    file=relative,
-                    field_name=missing_field,
-                )
-                continue
-            try:
-                operation = files.plan_registration_move(
-                    source,
-                    target_filename,
-                    record.row_number,
-                    "high-confidence local catalogue match",
-                )
-            except FileOperationError as exc:
-                self._block(
-                    catalogue,
-                    record,
-                    result,
-                    file_result,
-                    "source_changed_during_run",
-                    str(exc),
-                    file=relative,
-                )
-                continue
-            updates = {
-                "pdf_status": PdfStatus.REGISTERED.value,
-                "pdf_filename": target_filename,
-                "pdf_relative_path": operation.target.relative_to(
-                    self.settings.library_root
-                ).as_posix(),
-            }
-            if not record.get("title") and confirmed_title:
-                updates["title"] = confirmed_title
-            if not record.get("year") and confirmed_year:
-                updates["year"] = confirmed_year
-            if not record.get("journal") and confirmed_journal:
-                updates["journal"] = confirmed_journal
-            file_result.update(
-                {
-                    "target_filename": target_filename,
-                    "target_path": updates["pdf_relative_path"],
-                    "action": "planned",
-                }
-            )
-            planned.append(
-                {
-                    "source": source,
-                    "record": record,
-                    "operation": operation,
-                    "updates": updates,
-                    "file_result": file_result,
-                }
-            )
-
-        problems = files.validate_plan([item["operation"] for item in planned])
-        blocked_rows = {int(problem["row"]) for problem in problems}
-        for problem in problems:
-            item = next(
-                entry for entry in planned if entry["record"].row_number == int(problem["row"])
-            )
-            self._block(
-                catalogue,
-                item["record"],
-                result,
-                item["file_result"],
-                "registered_filename_collision",
-                f"Registration collision: {problem['issue']} at {problem['target']}",
-                file=item["file_result"]["source_path"],
-            )
-        ready = [
-            item for item in planned if item["record"].row_number not in blocked_rows
-        ]
-
-        result.counts = {
-            "files_discovered": len(discovered),
-            "ready": len(ready),
-            "blocked": len(result.needs_review),
-            "metadata_lookup_requests": metadata_requests,
-            "ocr_files": ocr_files,
-        }
-        result.details.update(
-            {
-                "files": file_results,
-                "metadata_lookup_requests": metadata_requests,
-                "manual_checkpoint_required": False,
-            }
-        )
-        if dry_run:
-            result.completed.extend(
-                {
-                    "action": "would_register",
-                    "row": item["record"].row_number,
-                    "source": item["file_result"]["source_path"],
-                    "target": item["file_result"]["target_path"],
-                    "planned_updates": item["updates"],
-                }
-                for item in ready
-            )
-            result.changed_rows = len({change.row_number for change in catalogue.changes})
-            result.details["remaining_in_inbox"] = [
-                path.relative_to(self.settings.library_root).as_posix()
-                for path in self._eligible_pdf_files()
-            ]
-            result.finalize_status()
-            ReportService(self.settings.reports_dir).write(result)
-            return result
-
-        journal = self._create_journal(ready) if ready else None
-        moved: list[dict[str, Any]] = []
-        today = date.today().isoformat()
-        for item in ready:
-            operation: FileOperation = item["operation"]
-            record: CatalogueRecord = item["record"]
-            try:
-                files.apply_registration_move(operation)
-                moved.append(item)
-                updates = {
-                    key: value
-                    for key, value in item["updates"].items()
-                    if key in catalogue.headers
-                }
-                if "date_updated" in catalogue.headers:
-                    updates["date_updated"] = today
-                catalogue.update_fields(record, updates)
-                item["file_result"]["action"] = "registered"
-                result.completed.append(
-                    {
-                        "action": "registered",
-                        "row": record.row_number,
-                        "source": item["file_result"]["source_path"],
-                        "target": item["file_result"]["target_path"],
-                    }
-                )
-                if journal:
-                    journal.set_operation_state(record.row_number, "file_moved")
-            except FileOperationError as exc:
-                issue_key = (
-                    "target_appeared_during_run"
-                    if operation.target.exists()
-                    else "source_changed_during_run"
-                )
-                self._block(
-                    catalogue,
-                    record,
-                    result,
-                    item["file_result"],
-                    issue_key,
-                    str(exc),
-                    file=item["file_result"]["source_path"],
-                )
-                if journal:
-                    journal.set_operation_state(
-                        record.row_number, "failed", error=str(exc)
-                    )
-
-        backup = catalogue.save_atomic()
-        if backup:
-            result.catalogue_backup = str(backup)
-        if journal:
-            for item in moved:
-                journal.set_operation_state(
-                    item["record"].row_number, "catalogue_committed"
-                )
-        self._commit_file_blockers(file_results)
-
-        result.changed_files = len(moved)
-        result.changed_rows = len({change.row_number for change in catalogue.changes})
-        if moved or catalogue.changes:
-            append_change_log(
-                self.settings.changes_log_path,
-                workflow="Workflow 3",
-                action="Inbox identification and registration",
-                files_changed=len(moved),
-                catalogue_rows_changed=result.changed_rows,
-                reason="Registered high-confidence Inbox PDFs",
-                uncertainty=f"{len(result.needs_review)} item(s) need review",
-            )
-
-        final_check = DailyCheckWorkflow(self.settings).run(
-            dry_run=False, final_check=True
-        )
-        result.details["final_check"] = {
-            "status": final_check.status.value,
-            "report": final_check.report_path,
-        }
-        result.state_committed = final_check.state_committed
-        for review in final_check.needs_review:
-            if review not in result.needs_review:
-                result.needs_review.append(review)
-        for failure in final_check.failures:
-            if failure not in result.failures:
-                result.failures.append(failure)
-        if journal:
-            journal.finish("final_check_committed")
-
-        result.details["manual_checkpoint_required"] = bool(moved)
-        result.details["manual_checkpoint"] = (
-            "Please review catalogue.xlsx before running Workflow 4."
-            if moved
-            else None
-        )
-        result.details["remaining_in_inbox"] = [
-            path.relative_to(self.settings.library_root).as_posix()
-            for path in self._eligible_pdf_files()
-        ]
-        result.finalize_status()
-        ReportService(self.settings.reports_dir).write(result)
-        return result
 
     def _discover_inbox(self) -> tuple[list[Path], list[dict[str, Any]]]:
         eligible: list[Path] = []
         skipped: list[dict[str, Any]] = []
         if not self.settings.inbox_dir.is_dir():
             return eligible, skipped
-        for path in sorted(self.settings.inbox_dir.iterdir(), key=lambda item: item.name.casefold()):
+        for path in sorted(
+            self.settings.inbox_dir.iterdir(), key=lambda item: item.name.casefold()
+        ):
             relative = path.relative_to(self.settings.library_root).as_posix()
             if path.is_dir():
                 skipped.append({"file": relative, "reason": "inbox_subdirectory"})
@@ -685,40 +109,141 @@ class InboxRegisterWorkflow:
         return next((row for row in records if row.row_number == row_number), None)
 
     @staticmethod
-    def _confirmed_identity(
-        records: list[CatalogueRecord], candidate_rows: list[int]
-    ) -> str | None:
-        confirmed: list[str] = []
-        for record in records:
-            if record.row_number not in candidate_rows:
-                continue
-            match = re.search(
-                r"^USER_CONFIRMED:\s*field=paper_identity;\s*value=([^;\r\n]*)",
-                str(record.get("uncertainty") or ""),
-                re.I | re.M,
-            )
-            if match and match.group(1).strip():
-                confirmed.append(match.group(1).strip())
-        return confirmed[0] if len(set(confirmed)) == 1 else None
+    def _lookup_request(
+        inspection, relative: str, record: CatalogueRecord | None = None
+    ) -> MetadataLookupRequest:
+        """Backward-compatible single request using the highest-priority evidence."""
+        requests = InboxRegisterWorkflow._lookup_requests(record, inspection, relative)
+        return requests[0] if requests else MetadataLookupRequest(source_pdf=relative)
 
     @staticmethod
-    def _lookup_request(inspection, relative: str) -> MetadataLookupRequest:
-        first_doi = inspection.doi_candidates[0] if inspection.doi_candidates else None
-        first_pmid = inspection.pmid_candidates[0] if inspection.pmid_candidates else None
-        first_title = inspection.title_candidates[0] if inspection.title_candidates else None
-        candidate = first_doi or first_pmid or first_title
-        return MetadataLookupRequest(
-            doi=first_doi.value if first_doi else None,
-            pmid=first_pmid.value if first_pmid else None,
-            title=first_title.value if first_title else None,
-            authors=inspection.metadata_author or None,
-            year=inspection.year_candidates[0] if inspection.year_candidates else None,
-            journal=inspection.journal_candidates[0] if inspection.journal_candidates else None,
-            source_pdf=relative,
-            candidate_source=(candidate.source_type if candidate else None),
-            candidate_confidence=(candidate.confidence if candidate else None),
-            candidate_context=(candidate.line_or_context[:300] if isinstance(candidate, IdentifierCandidate) else candidate.value[:300] if candidate else None),
+    def _lookup_requests(
+        record: CatalogueRecord | None, inspection, relative: str
+    ) -> list[MetadataLookupRequest]:
+        uncertainty = str(record.get("uncertainty") or "") if record else ""
+        identity_confirmation = confirmation_for(uncertainty, "paper_identity")
+        local = inspection.local_metadata or {}
+        catalogue_id = str(record.get("id") or "") if record else ""
+        supporting = {
+            "title": (
+                confirmed_value(uncertainty, "title")
+                or str(record.get("title") or "") if record else ""
+            ) or str(local.get("title") or ""),
+            "authors": (
+                str(record.get("authors") or "") if record else ""
+            ) or "; ".join(local.get("authors") or ()) or inspection.metadata_author,
+            "year": (
+                confirmed_value(uncertainty, "publication_year")
+                or (str(record.get("year") or "") if record else "")
+                or str(local.get("year") or "")
+                or (inspection.year_candidates[0] if inspection.year_candidates else "")
+            ),
+            "journal": (
+                confirmed_value(uncertainty, "journal")
+                or (str(record.get("journal") or "") if record else "")
+                or str(local.get("journal") or "")
+                or (inspection.journal_candidates[0] if inspection.journal_candidates else "")
+            ),
+        }
+
+        requests: list[MetadataLookupRequest] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add_request(
+            *,
+            pmid: str = "",
+            doi: str = "",
+            arxiv_id: str = "",
+            title: str = "",
+            source: str,
+            confidence: str = "high",
+            context: str = "",
+        ) -> None:
+            query_type = "pmid" if pmid else "doi" if doi else "arxiv" if arxiv_id else "title"
+            query_value = pmid or doi or arxiv_id or normalize_title(title)
+            if query_type == "title" and (
+                len(str(title).strip()) < 12 or len(str(title).split()) < 3
+            ):
+                return
+            if not query_value or (query_type, query_value) in seen:
+                return
+            seen.add((query_type, query_value))
+            requests.append(
+                MetadataLookupRequest(
+                    pmid=pmid or None,
+                    doi=doi or None,
+                    arxiv_id=arxiv_id or None,
+                    title=title or supporting["title"] or None,
+                    authors=supporting["authors"] or None,
+                    year=supporting["year"] or None,
+                    journal=supporting["journal"] or None,
+                    catalogue_id=catalogue_id or None,
+                    user_confirmed_identity=identity_confirmation is not None,
+                    source_pdf=relative,
+                    candidate_source=source,
+                    candidate_confidence=confidence,
+                    candidate_context=context[:300] or None,
+                )
+            )
+
+        if identity_confirmation and identity_confirmation.value:
+            confirmed = identity_confirmation.value
+            add_request(
+                pmid=normalize_pmid(confirmed),
+                doi=normalize_doi(confirmed),
+                arxiv_id=normalize_arxiv_id(confirmed),
+                title=(supporting["title"] if not any((normalize_pmid(confirmed), normalize_doi(confirmed), normalize_arxiv_id(confirmed))) else ""),
+                source="user_confirmation",
+                context=confirmed,
+            )
+        if record:
+            add_request(pmid=normalize_pmid(record.get("pmid")), source="catalogue_pmid")
+            add_request(doi=normalize_doi(record.get("doi")), source="catalogue_doi")
+            add_request(
+                arxiv_id=normalize_arxiv_id(record.get("arxiv_id")),
+                source="catalogue_arxiv_id",
+            )
+        for item in inspection.pmid_candidates:
+            add_request(
+                pmid=normalize_pmid(item.value),
+                source=item.source_type,
+                confidence=item.confidence,
+                context=item.line_or_context,
+            )
+        for item in inspection.doi_candidates:
+            add_request(
+                doi=normalize_doi(item.value),
+                source=item.source_type,
+                confidence=item.confidence,
+                context=item.line_or_context,
+            )
+        if record and supporting["title"]:
+            add_request(title=supporting["title"], source="catalogue_title")
+        source_priority = (
+            "filename",
+            "metadata",
+            "page_top",
+            "first_page",
+            "sampled_page",
+            "ocr",
         )
+        for prefix in source_priority:
+            candidate = next(
+                (
+                    item
+                    for item in inspection.title_candidates
+                    if item.source_type == prefix or item.source_type.startswith(prefix)
+                ),
+                None,
+            )
+            if candidate:
+                add_request(
+                    title=candidate.value,
+                    source=candidate.source_type,
+                    confidence=candidate.confidence,
+                    context=candidate.value,
+                )
+        return requests
 
     @staticmethod
     def _metadata_supports_inspection(metadata: MetadataRecord, inspection) -> bool:
@@ -740,13 +265,12 @@ class InboxRegisterWorkflow:
         )
         if metadata.doi and doi_candidates:
             matching = [
-                item
-                for item in doi_candidates
+                item for item in doi_candidates
                 if normalize_doi(item.value) == normalize_doi(metadata.doi)
             ]
             if matching:
                 if all(item.source_type == "ocr_corrected" for item in matching):
-                    return title_matches or (title_matches and year_matches)
+                    return title_matches and (year_matches or not metadata.year)
                 return True
             return False
         if metadata.pmid and pmid_candidates:
@@ -819,8 +343,7 @@ class InboxRegisterWorkflow:
         matches = [row for row in records if normalize_title(row.get("title")) == title]
         if metadata.year:
             supported = [
-                row
-                for row in matches
+                row for row in matches
                 if not row.get("year") or str(row.get("year")).strip() == metadata.year
             ]
             if supported:
@@ -848,16 +371,11 @@ class InboxRegisterWorkflow:
                 equivalent = normalize_pmid(current) == normalize_pmid(value)
             elif field == "title":
                 equivalent = normalize_title(current) == normalize_title(value)
+            elif field == "journal":
+                equivalent = journals_equivalent(current, value)
             else:
                 equivalent = normalized_text(current) == normalized_text(value)
-            if not equivalent and field in {
-                "title",
-                "authors",
-                "year",
-                "journal",
-                "doi",
-                "pmid",
-            }:
+            if not equivalent and field in {"title", "authors", "year", "journal", "doi", "pmid"}:
                 conflicts.append(f"field={field}")
         return updates, conflicts
 
@@ -870,6 +388,142 @@ class InboxRegisterWorkflow:
             and metadata.year
             and metadata.source
         )
+
+    @staticmethod
+    def _journal_names_equivalent(left: object, right: object) -> bool:
+        return journals_equivalent(left, right)
+
+    @staticmethod
+    def _journal_is_variant(left: object, right: object) -> bool:
+        return journal_is_variant(left, right)
+
+    @staticmethod
+    def _author_list(value: object) -> list[str]:
+        if isinstance(value, (list, tuple)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = str(value or "").strip()
+        if not text:
+            return []
+        return [item.strip() for item in re.split(r"\s*;\s*", text) if item.strip()]
+
+    @classmethod
+    def build_merged_identity_evidence(
+        cls,
+        record: CatalogueRecord | None,
+        provider: MetadataRecord | None,
+        inspection,
+        *,
+        lookup_confidence: str = "",
+    ) -> tuple[MetadataRecord, dict[str, str], list[str]]:
+        uncertainty = str(record.get("uncertainty") or "") if record else ""
+        local = inspection.local_metadata or {}
+        sources: dict[str, str] = {}
+        conflicts: list[str] = []
+
+        def choose(field: str, provider_value: object, confirmed_field: str | None = None):
+            confirmed = confirmed_value(uncertainty, confirmed_field or field)
+            catalogue_value = record.get(field) if record else None
+            local_value = local.get(field)
+            for source, value in (
+                ("provider", provider_value),
+                ("user_confirmed", confirmed),
+                ("catalogue", catalogue_value),
+                ("pypdf_first_page", local_value),
+            ):
+                if value not in (None, "", [], ()):
+                    sources[field] = source
+                    return value
+            return ""
+
+        provider = provider or MetadataRecord()
+        pmid = normalize_pmid(choose("pmid", provider.pmid))
+        doi = normalize_doi(choose("doi", provider.doi))
+        arxiv_id = normalize_arxiv_id(
+            choose("arxiv_id", provider.arxiv_id)
+        )
+        title = str(choose("title", provider.title) or "")
+        authors = cls._author_list(choose("authors", provider.authors))
+        year = str(choose("year", provider.year, "publication_year") or "")
+        journal = str(choose("journal", provider.journal) or "")
+        journal_abbrev = str(choose("journal_abbrev", provider.journal_abbrev) or "")
+        publication_type = choose("publication_type", provider.publication_type)
+
+        catalogue_pmid = normalize_pmid(record.get("pmid")) if record else ""
+        catalogue_doi = normalize_doi(record.get("doi")) if record else ""
+        pdf_pmids = {
+            normalize_pmid(item.value)
+            for item in inspection.pmid_candidates
+            if normalize_pmid(item.value)
+        }
+        pdf_dois = {
+            normalize_doi(item.value)
+            for item in inspection.doi_candidates
+            if normalize_doi(item.value) and item.source_type != "ocr_corrected"
+        }
+        if catalogue_pmid and provider.pmid and catalogue_pmid != normalize_pmid(provider.pmid):
+            conflicts.append("pmid_catalogue_provider_conflict")
+        if catalogue_doi and provider.doi and catalogue_doi != normalize_doi(provider.doi):
+            conflicts.append("doi_catalogue_provider_conflict")
+        if catalogue_pmid and pdf_pmids and catalogue_pmid not in pdf_pmids:
+            conflicts.append("pmid_catalogue_pdf_conflict")
+        if catalogue_doi and pdf_dois and catalogue_doi not in pdf_dois:
+            conflicts.append("doi_catalogue_pdf_conflict")
+
+        merged = MetadataRecord(
+            canonical_id=(provider.canonical_id or (str(record.get("id") or "") if record else "")),
+            title=title,
+            authors=authors,
+            year=year,
+            journal=journal,
+            journal_abbrev=journal_abbrev,
+            doi=doi,
+            pmid=pmid,
+            arxiv_id=arxiv_id,
+            publication_type=publication_type or None,
+            raw_publication_types=list(provider.raw_publication_types),
+            abstract=provider.abstract,
+            keywords=list(provider.keywords),
+            mesh_terms=list(provider.mesh_terms),
+            categories=list(provider.categories),
+            source=list(dict.fromkeys([*provider.source, "catalogue" if record else "", "local_pdf" if local else ""])),
+        )
+        merged.source = [item for item in merged.source if item]
+        sources["lookup_confidence"] = lookup_confidence
+        return merged, sources, conflicts
+
+    @staticmethod
+    def validate_durable_identity(
+        merged: MetadataRecord,
+        *,
+        sources: dict[str, str],
+        conflicts: list[str],
+        user_confirmed_identity: bool,
+        lookup_confidence: str,
+        inspection,
+    ) -> tuple[bool, str]:
+        if conflicts:
+            return False, "metadata_identifier_conflict"
+        has_naming_core = bool(merged.title and merged.year and (merged.journal or merged.journal_abbrev))
+        has_authors = bool(merged.authors)
+        exact_identifier = lookup_confidence == "exact_identifier" and bool(
+            merged.pmid or merged.doi or merged.arxiv_id
+        )
+        if exact_identifier and merged.title and (merged.year or has_authors):
+            return True, "provider_identifier_merged"
+        if lookup_confidence == "exact_title_supported" and merged.title and has_authors and merged.year:
+            return True, "provider_title_merged"
+        if user_confirmed_identity and has_naming_core and (has_authors or merged.pmid or merged.doi):
+            return True, "user_confirmed_merged"
+        local = inspection.local_metadata or {}
+        local_quality = bool(
+            local.get("title")
+            and local.get("authors")
+            and local.get("year")
+            and local.get("journal")
+        )
+        if local_quality and has_naming_core and has_authors:
+            return True, "local_pdf_high_quality"
+        return False, "durable_identity_incomplete"
 
     @staticmethod
     def _metadata_row_values(
@@ -895,71 +549,14 @@ class InboxRegisterWorkflow:
         }
 
     @staticmethod
-    def _block(
-        catalogue: CatalogueService,
-        record: CatalogueRecord | None,
-        result: WorkflowResult,
-        file_result: dict[str, Any],
-        issue_key: str,
-        issue: str,
-        *,
-        file: str,
-        field_name: str | None = None,
-    ) -> None:
-        item = {"file": file, "issue": issue_key, "details": issue}
-        file_result["action"] = "blocked"
-        if issue_key not in file_result["issue_keys"]:
-            file_result["issue_keys"].append(issue_key)
-        if record is None:
-            if item not in result.needs_review:
-                result.needs_review.append(item)
-            return
-        outcome = catalogue.ensure_review_blocker(
-            record,
-            field_name
-            or ("paper_identity" if "identity" in issue_key else "pdf_file"),
-            issue,
-            issue_key=issue_key,
-            conflict_with_confirmation=issue_key in {"identifier_conflict"},
-        )
-        item["row"] = record.row_number
-        if outcome in {"added", "existing"}:
-            if item not in result.needs_review:
-                result.needs_review.append(item)
-        else:
-            result.skipped.append({**item, "reason": f"review_{outcome}"})
-
-    def _create_journal(self, ready: list[dict[str, Any]]) -> OperationJournal:
-        operations = []
-        for item in ready:
-            operation = item["operation"]
-            operations.append(
-                {
-                    **operation.to_dict(),
-                    "source_fingerprint": {
-                        "size": operation.expected_size,
-                        "mtime_ns": operation.expected_mtime_ns,
-                    },
-                    "planned_updates": item["updates"],
-                    "execution_state": "planned",
-                }
-            )
-        return OperationJournal.create(self.settings.state_dir, operations)
-
-    @staticmethod
     def _confirmed_value(record: CatalogueRecord, field_name: str) -> str:
-        match = re.search(
-            rf"^USER_CONFIRMED:\s*field={re.escape(field_name)};\s*value=([^;\r\n]*)",
-            str(record.get("uncertainty") or ""),
-            re.I | re.M,
-        )
-        return match.group(1).strip() if match else ""
+        return confirmed_value(record.get("uncertainty"), field_name)
 
     def _commit_file_blockers(self, file_results: list[dict[str, Any]]) -> None:
         path = self.settings.state_dir / "inbox_blockers.json"
         blockers = []
         for item in file_results:
-            if item.get("action") != "blocked" or not item.get("issue_keys"):
+            if item.get("action") not in {"blocked", "provisional"} or not item.get("issue_keys"):
                 continue
             inspection = item.get("inspection") or {}
             blockers.append(
@@ -977,7 +574,10 @@ class InboxRegisterWorkflow:
                     "issue_keys": sorted(set(item.get("issue_keys") or [])),
                 }
             )
-        payload = {"version": 1, "files": sorted(blockers, key=lambda row: row["stable_file_id"])}
+        payload = {
+            "version": 1,
+            "files": sorted(blockers, key=lambda row: row["stable_file_id"]),
+        }
         if path.is_file():
             try:
                 if json.loads(path.read_text(encoding="utf-8")) == payload:

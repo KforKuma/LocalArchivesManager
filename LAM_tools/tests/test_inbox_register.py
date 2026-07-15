@@ -120,7 +120,7 @@ def test_doi_match_registers_when_filename_is_unknown(library_factory):
     assert result.details["files"][0]["match_method"] == "doi"
 
 
-def test_unavailable_metadata_blocks_without_creating_catalogue_row(library_factory):
+def test_unavailable_metadata_creates_provisional_catalogue_row(library_factory):
     root = library_factory([])
     write_text_pdf(root / "Inbox" / "unknown.pdf", ["Unknown Local Document\nNo identifiers"])
     settings = Settings.from_root(root)
@@ -129,12 +129,23 @@ def test_unavailable_metadata_blocks_without_creating_catalogue_row(library_fact
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Inbox" / "unknown.pdf").exists()
     assert result.details["metadata_lookup_requests"] == 1
-    assert result.details["files"][0]["issue_keys"] == ["metadata_provider_unavailable"]
+    assert result.details["files"][0]["result_status"] == "provisional"
+    assert result.details["files"][0]["issue_keys"] == [
+        "metadata_provider_unavailable",
+        "metadata_identity_unconfirmed",
+    ]
     workbook = load_workbook(root / "catalogue.xlsx")
-    assert workbook["Catalogue"].max_row == 1
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.max_row == 2
+    assert str(sheet.cell(2, headers["id"]).value).startswith("LOCAL:")
+    assert sheet.cell(2, headers["pdf_status"]).value == "inbox"
+    assert "issue_key=metadata_identity_unconfirmed" in sheet.cell(
+        2, headers["uncertainty"]
+    ).value
 
 
-def test_no_text_blocks_known_row_and_does_not_move(library_factory):
+def test_existing_exact_filename_record_skips_pdf_content_and_registers(library_factory):
     root = library_factory(
         [
             {
@@ -150,9 +161,10 @@ def test_no_text_blocks_known_row_and_does_not_move(library_factory):
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
     result = InboxRegisterWorkflow(settings).run()
-    assert result.status == WorkflowStatus.NEEDS_REVIEW
-    assert (root / "Inbox" / "blank.pdf").exists()
-    assert any(item.get("issue") == "pdf_text_unavailable" for item in result.needs_review)
+    assert result.status == WorkflowStatus.SUCCESS
+    assert not (root / "Inbox" / "blank.pdf").exists()
+    assert (root / "Registered" / "Test Journal, 2025 - Blank PDF.pdf").exists()
+    assert result.details["files"][0]["inspection_level_used"] == "skip"
 
 
 def test_one_blocked_file_does_not_prevent_other_registration(library_factory):
@@ -240,7 +252,7 @@ def test_supplement_is_kept_in_inbox_under_single_pdf_schema(library_factory):
     )
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
-    result = InboxRegisterWorkflow(settings).run()
+    result = InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Inbox" / "Main Paper - Supporting Information.pdf").exists()
     assert any(item.get("issue") == "supplement_parent_unknown" for item in result.needs_review)
@@ -254,11 +266,40 @@ def test_unknown_file_blocker_state_is_stable_across_runs(library_factory):
     InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     blocker_path = root / ".library_state" / "inbox_blockers.json"
     first = blocker_path.read_bytes()
+    workbook = load_workbook(root / "catalogue.xlsx")
+    first_local_id = workbook["Catalogue"]["A2"].value
     InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
     assert blocker_path.read_bytes() == first
+    workbook = load_workbook(root / "catalogue.xlsx")
+    assert workbook["Catalogue"].max_row == 2
+    assert workbook["Catalogue"]["A2"].value == first_local_id
     payload = json.loads(first)
     assert len(payload["files"]) == 1
-    assert payload["files"][0]["issue_keys"] == ["metadata_provider_unavailable"]
+    assert payload["files"][0]["issue_keys"] == [
+        "metadata_identity_unconfirmed",
+        "ocr_unavailable",
+    ]
+
+
+def test_renamed_unchanged_provisional_reuses_saved_local_identity(library_factory):
+    root = library_factory([])
+    original = root / "Inbox" / "unknown.pdf"
+    renamed = root / "Inbox" / "renamed_unknown.pdf"
+    write_text_pdf(original, ["Unknown Local Document"])
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
+    workbook = load_workbook(root / "catalogue.xlsx")
+    local_id = workbook["Catalogue"]["A2"].value
+    original.rename(renamed)
+
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.max_row == 2
+    assert sheet.cell(2, headers["id"]).value == local_id
+    assert sheet.cell(2, headers["pdf_relative_path"]).value == "Inbox/renamed_unknown.pdf"
 
 
 def test_source_change_before_move_is_blocked_and_other_state_is_preserved(
@@ -437,7 +478,7 @@ def test_workflow3_provider_result_creates_row_and_registers(library_factory):
     assert workbook["Catalogue"]["A2"].value == "PMID:12345678"
 
 
-def test_workflow3_ambiguous_provider_keeps_file_and_does_not_add_row(library_factory):
+def test_workflow3_ambiguous_provider_keeps_file_and_adds_provisional_row(library_factory):
     root = library_factory([])
     write_text_pdf(root / "Inbox" / "ambiguous.pdf", ["Ambiguous Provider Paper"])
     lookup = MetadataLookupResult(
@@ -450,7 +491,9 @@ def test_workflow3_ambiguous_provider_keeps_file_and_does_not_add_row(library_fa
     result = InboxRegisterWorkflow(settings, FixedMetadataService(lookup)).run()
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Inbox" / "ambiguous.pdf").exists()
-    assert load_workbook(root / "catalogue.xlsx")["Catalogue"].max_row == 1
+    sheet = load_workbook(root / "catalogue.xlsx")["Catalogue"]
+    assert sheet.max_row == 2
+    assert str(sheet["A2"].value).startswith("LOCAL:")
 
 
 def test_scanned_pdf_ocr_doi_registers_to_existing_row(library_factory):
@@ -638,3 +681,274 @@ def test_ocr_doi_workflow2_metadata_is_revalidated_before_registration(library_f
     result = InboxRegisterWorkflow(settings, FixedMetadataService(lookup), ocr).run()
     assert (root / "Registered" / "Metadata Journal, 2025 - Workflow Two Confirmed OCR Paper.pdf").exists()
     assert result.details["files"][0]["match_method"] == "workflow2_provider"
+
+
+def test_filename_provider_success_skips_pdf_inspection(library_factory, monkeypatch):
+    root = library_factory([])
+    name = "Biomed J, 2025 - Provider Canonical Paper.pdf"
+    write_text_pdf(root / "Inbox" / name, [""])
+    metadata = MetadataRecord(
+        canonical_id="PMID:11112222",
+        title="Provider Canonical Paper",
+        authors=["Alice Smith"],
+        year="2025",
+        journal="Biomedical Journal",
+        journal_abbrev="Biomed J",
+        doi="10.1000/provider.canonical",
+        pmid="11112222",
+        source=["pubmed"],
+    )
+    lookup = MetadataLookupResult(
+        MetadataLookupStatus.FOUND,
+        records=[metadata.to_dict()],
+        best_record=metadata.to_dict(),
+        confidence="exact_title_supported",
+        providers_used=["pubmed"],
+        selection_reason="Filename title and year matched uniquely.",
+    )
+
+    def fail_inspection(*args, **kwargs):
+        raise AssertionError("PDF content should not be opened after filename lookup succeeds")
+
+    monkeypatch.setattr("lam.services.pdf_service.PdfService.inspect", fail_inspection)
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(settings, FixedMetadataService(lookup)).run()
+    assert result.status == WorkflowStatus.SUCCESS
+    assert result.details["files"][0]["inspection_level_used"] == "skip"
+    assert result.details["files"][0]["canonical_title_selected"] == metadata.title
+    assert (root / "Registered" / name).exists()
+
+
+def test_filename_lookup_failure_then_pypdf_creates_provisional(library_factory):
+    root = library_factory([])
+    name = "Test J, 2025 - Filename Search Candidate.pdf"
+    write_text_pdf(root / "Inbox" / name, ["PDF Layer Candidate\nAlice Smith\n2025"])
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    service = FixedMetadataService(
+        MetadataLookupResult(MetadataLookupStatus.NOT_FOUND, selection_reason="No result")
+    )
+    result = InboxRegisterWorkflow(settings, service).run()
+    file_result = result.details["files"][0]
+    assert service.calls == 2
+    assert file_result["inspection_level_used"] == "pypdf_text"
+    assert file_result["result_status"] == "provisional"
+    assert (root / "Inbox" / name).exists()
+
+
+def test_pypdf_success_does_not_trigger_ocr(library_factory):
+    root = library_factory([])
+    write_text_pdf(
+        root / "Inbox" / "local.pdf",
+        ["A High Quality Local PDF Title\nAlice Smith\n2025"],
+    )
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    ocr = FixedOcrService(ocr_success(title="Unused OCR Title"))
+    result = InboxRegisterWorkflow(
+        settings, UnavailableMetadataService(), ocr
+    ).run()
+    assert ocr.calls == []
+    assert result.details["files"][0]["inspection_level_used"] == "pypdf_text"
+
+
+def test_pypdf_insufficient_triggers_ocr_and_keeps_provisional(library_factory):
+    root = library_factory([])
+    write_text_pdf(root / "Inbox" / "scan.pdf", [""])
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    ocr = FixedOcrService(ocr_success(title="OCR Identified Local Candidate"))
+    result = InboxRegisterWorkflow(
+        settings, UnavailableMetadataService(), ocr
+    ).run()
+    assert ocr.calls == ["scan.pdf"]
+    assert result.details["files"][0]["inspection_level_used"] == "ocr"
+    assert result.details["files"][0]["result_status"] in {"provisional", "blocked"}
+    assert (root / "Inbox" / "scan.pdf").exists()
+
+
+def test_provisional_record_uid_is_stable_when_provider_upgrades_id(library_factory):
+    root = library_factory([])
+    name = "Biomed J, 2025 - Temporary Local Title.pdf"
+    write_text_pdf(root / "Inbox" / name, ["Temporary Local Title\nAlice Smith\n2025"])
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    first = InboxRegisterWorkflow(
+        settings,
+        FixedMetadataService(
+            MetadataLookupResult(MetadataLookupStatus.AMBIGUOUS, selection_reason="Two results")
+        ),
+    ).run()
+    assert first.status == WorkflowStatus.NEEDS_REVIEW
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    local_id = sheet.cell(2, headers["id"]).value
+    record_uid = sheet.cell(2, headers["record_uid"]).value
+    assert str(local_id).startswith("LOCAL:")
+
+    metadata = MetadataRecord(
+        canonical_id="PMID:22223333",
+        title="Provider Canonical Replacement Title",
+        authors=["Alice Smith"],
+        year="2025",
+        journal="Biomedical Journal",
+        journal_abbrev="Biomed J",
+        doi="10.1000/replacement",
+        pmid="22223333",
+        source=["pubmed"],
+    )
+    second = InboxRegisterWorkflow(
+        settings,
+        FixedMetadataService(
+            MetadataLookupResult(
+                MetadataLookupStatus.FOUND,
+                records=[metadata.to_dict()],
+                best_record=metadata.to_dict(),
+                confidence="exact_title_supported",
+                providers_used=["pubmed"],
+                selection_reason="Provider identity confirmed.",
+            )
+        ),
+    ).run()
+    assert second.status == WorkflowStatus.SUCCESS
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    assert sheet.max_row == 2
+    assert sheet.cell(2, headers["id"]).value == "PMID:22223333"
+    assert sheet.cell(2, headers["record_uid"]).value == record_uid
+    assert sheet.cell(2, headers["title"]).value == metadata.title
+    assert not sheet.cell(2, headers["uncertainty"]).value
+
+
+def test_provisional_uses_pypdf_title_before_filename(library_factory):
+    root = library_factory([])
+    write_text_pdf(
+        root / "Inbox" / "Misleading Filename Candidate.pdf",
+        ["Reliable PDF Layer Paper Title\nAlice Smith"],
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.cell(2, headers["title"]).value == "Reliable PDF Layer Paper Title"
+    assert "title_provisional_pypdf" in sheet.cell(2, headers["uncertainty"]).value
+
+
+def test_standard_filename_beats_administrative_pypdf_heading(library_factory):
+    root = library_factory([])
+    name = "Test J, 2025 - Reliable Filename Paper Title.pdf"
+    write_text_pdf(
+        root / "Inbox" / name,
+        ["Accepted: 7 July 2025 / Published online: 31 July 2025"],
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.cell(2, headers["title"]).value == "Reliable Filename Paper Title"
+    assert "title_provisional_filename" in sheet.cell(2, headers["uncertainty"]).value
+
+
+def test_filename_title_is_preferred_to_ocr_for_provisional(library_factory):
+    root = library_factory([])
+    name = "Meaningful Filename Candidate.pdf"
+    write_text_pdf(root / "Inbox" / name, [""])
+    settings = with_ocr(Settings.from_root(root))
+    settings.ensure_runtime_directories()
+    InboxRegisterWorkflow(
+        settings,
+        UnavailableMetadataService(),
+        FixedOcrService(ocr_success(title="Different OCR Candidate")),
+    ).run()
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.cell(2, headers["title"]).value == "Meaningful Filename Candidate"
+    assert "title_provisional_filename" in sheet.cell(2, headers["uncertainty"]).value
+
+
+def test_user_confirmed_provisional_title_is_not_overwritten(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "LOCAL:fixed-id",
+                "title": "User Chosen Local Title",
+                "pdf_status": "inbox",
+                "pdf_filename": "candidate.pdf",
+                "pdf_relative_path": "Inbox/candidate.pdf",
+                "uncertainty": (
+                    "USER_CONFIRMED: field=title; value=User Chosen Local Title\n"
+                    "NEEDS_REVIEW: field=paper_identity; "
+                    "issue_key=metadata_identity_unconfirmed; issue=Pending identity."
+                ),
+            }
+        ]
+    )
+    write_text_pdf(root / "Inbox" / "candidate.pdf", ["User Chosen Local Title\n2025"])
+    metadata = MetadataRecord(
+        canonical_id="PMID:77778888",
+        title="Different Provider Canonical Title",
+        authors=["Alice Smith"],
+        year="2025",
+        journal="Provider Journal",
+        pmid="77778888",
+        source=["pubmed"],
+    )
+    lookup = MetadataLookupResult(
+        MetadataLookupStatus.FOUND,
+        records=[metadata.to_dict()],
+        best_record=metadata.to_dict(),
+        confidence="exact_title_supported",
+        providers_used=["pubmed"],
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(settings, FixedMetadataService(lookup)).run()
+    assert result.status == WorkflowStatus.NEEDS_REVIEW
+    workbook = load_workbook(root / "catalogue.xlsx")
+    sheet = workbook["Catalogue"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.cell(2, headers["title"]).value == "User Chosen Local Title"
+    assert "USER_CONFIRMED: field=title" in sheet.cell(2, headers["uncertainty"]).value
+
+
+def test_provisional_possible_formal_duplicate_is_blocked_without_merge(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "PMID:99990000",
+                "title": "Formal Paper Identity",
+                "doi": "10.1000/formal.duplicate",
+                "year": "2025",
+                "journal": "Formal Journal",
+            },
+            {
+                "id": "LOCAL:provisional-id",
+                "title": "Local Copy",
+                "pdf_status": "inbox",
+                "pdf_filename": "copy.pdf",
+                "pdf_relative_path": "Inbox/copy.pdf",
+                "uncertainty": (
+                    "NEEDS_REVIEW: field=paper_identity; "
+                    "issue_key=metadata_identity_unconfirmed; issue=Pending identity."
+                ),
+            },
+        ]
+    )
+    write_text_pdf(
+        root / "Inbox" / "copy.pdf",
+        ["Formal Paper Identity\ndoi:10.1000/formal.duplicate\n2025"],
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = InboxRegisterWorkflow(settings, UnavailableMetadataService()).run()
+    assert result.status == WorkflowStatus.NEEDS_REVIEW
+    assert "possible_duplicate_provisional_record" in result.details["files"][0]["issue_keys"]
+    assert load_workbook(root / "catalogue.xlsx")["Catalogue"].max_row == 3
+    assert (root / "Inbox" / "copy.pdf").exists()

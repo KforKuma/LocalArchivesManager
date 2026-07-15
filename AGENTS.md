@@ -61,7 +61,10 @@ Interpretation:
 
 ## Core safety rules
 
-1. Never delete files.
+1. Never delete user or library files. Only an explicitly requested
+   `lam cleanup --apply` may delete strictly allowlisted machine-generated
+   artifacts under its documented retention rules; Workflow 4 may remove only
+   a truly empty ordinary top-level topic directory after moving its last PDF.
 2. Never overwrite a PDF with different content.
 3. Never overwrite user-written notes, tags, classifications, or confirmations.
 4. Never silently resolve low-confidence matches or conflicting metadata.
@@ -102,6 +105,18 @@ notes
 ```
 
 User-authored entries in `uncertainty` are also protected.
+
+### Machine identity fields
+
+```text
+record_uid
+id
+```
+
+`record_uid` is an immutable UUID for the Catalogue row and must never be
+changed after assignment. `id` is the user-facing canonical paper identifier
+and may be upgraded only after durable high-confidence identification, using
+`PMID:` before `DOI:`, `ARXIV:`, and `LOCAL:`.
 
 ### Machine-fillable metadata fields
 
@@ -144,6 +159,11 @@ uncertainty
 ```
 
 Machine updates must still preserve protected user text and be logged.
+
+For an accepted exact provider record, harmless formatting normalization of
+machine metadata is allowed. PubMed journal title belongs in `journal`, its ISO
+abbreviation belongs in `journal_abbrev`, and `source` contains only the current
+primary canonical provider rather than a history of all contributing sources.
 
 ---
 
@@ -189,12 +209,16 @@ This means:
 
 - Workflow 2 may update eligible metadata and perform an explicitly requested download.
 - Workflow 3 may rename successfully identified files and move them from `Inbox/` to `Registered/`.
-- Workflow 4 may move files according to confirmed `topic_folder` values.
+- Workflow 4 may move registered files from `Registered/` or ordinary top-level
+  topic directories according to confirmed `topic_folder` values, and may
+  remove only a truly empty old topic directory.
+- An explicit `lam cleanup --apply` may remove only allowlisted
+  machine-generated artifacts selected under the documented retention policy.
 - These routine actions do not require separate per-file approval.
 
 Additional confirmation is required only when an action involves:
 
-- deletion;
+- deletion outside the two narrowly authorized cases above;
 - overwriting different file content;
 - merging folders;
 - a low-confidence or ambiguous paper match;

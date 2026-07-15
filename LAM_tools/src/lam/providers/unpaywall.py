@@ -19,6 +19,7 @@ from ..models import (
 )
 from ..services.metadata_cache_service import MetadataCacheService
 from ..utils.identifiers import normalize_doi
+from ..utils.publication_type import canonicalize_publication_type
 from .common import (
     cache_provider_result,
     offline_result,
@@ -175,6 +176,8 @@ class UnpaywallProvider:
             )
             if name:
                 authors.append(name)
+        raw_genres = [str(payload.get("genre") or "").strip()] if payload.get("genre") else []
+        canonical_type = canonicalize_publication_type(raw_genres)
         record = MetadataRecord(
             canonical_id=f"DOI:{doi}",
             title=str(payload.get("title") or "").strip(),
@@ -182,9 +185,8 @@ class UnpaywallProvider:
             year=str(payload.get("year") or "").strip(),
             journal=str(payload.get("journal_name") or "").strip(),
             doi=doi,
-            publication_type=[str(payload.get("genre") or "").strip()]
-            if payload.get("genre")
-            else [],
+            publication_type=canonical_type.canonical_type,
+            raw_publication_types=raw_genres,
             source=["unpaywall"],
             source_ids={"unpaywall": doi},
             is_published=True,

@@ -37,6 +37,8 @@ class ReportService:
             "catalogue_filing": "Catalogue-based filing report",
             "inbox_register": "Inbox registration report",
             "metadata_query": "Metadata query report",
+            "publication_type_repair": "Publication type repair report",
+            "cleanup": "Machine-generated file cleanup report",
         }.get(result.workflow, result.workflow)
         lines = [
             f"# {title}",

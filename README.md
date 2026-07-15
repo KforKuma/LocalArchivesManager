@@ -1,10 +1,11 @@
 # LAM — Local Archives Manager
 
 LAM provides deterministic local maintenance for a biomedical literature
-library stored alongside the source repository. Version 0.3.2 implements
+library stored alongside the source repository. Version 0.4.2 implements
 Workflow 1 (local reconciliation), Workflow 2 (network metadata lookup),
 Workflow 3 (Inbox identification and registration), and Workflow 4 (filing by
-the user-controlled `topic_folder`).
+the user-controlled `topic_folder`), including safe re-filing after a topic
+change. It also provides allowlisted maintenance cleanup.
 It never accesses `summary.md`.
 
 Workflow 2 queries PubMed, arXiv, and Unpaywall through synchronous,
@@ -33,17 +34,25 @@ lam register --root D:\ResearchLibrary --ocr auto
 lam register --root D:\ResearchLibrary --ocr always --ocr-dpi 250 --dry-run
 lam register --root D:\ResearchLibrary --ocr never
 lam doctor --root D:\ResearchLibrary --json
+lam repair-publication-types --root D:\ResearchLibrary --dry-run
+lam repair-publication-types --root D:\ResearchLibrary
+lam normalize-records --root D:\ResearchLibrary --dry-run
+lam normalize-records --root D:\ResearchLibrary
 lam search --root D:\ResearchLibrary --pmid 34265844 --dry-run
 lam search --root D:\ResearchLibrary --doi 10.1038/s41586-021-03819-2 --dry-run
 lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --dry-run
 lam search --root D:\ResearchLibrary --row 25
 lam search --root D:\ResearchLibrary --missing-metadata --max-records 25
+lam search --root D:\ResearchLibrary --incomplete-records --max-records 25
+lam search --root D:\ResearchLibrary --normalize-existing --max-records 25
 lam search --root D:\ResearchLibrary --doi 10.1000/example --offline
 lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --download
 lam search --root D:\ResearchLibrary --doi 10.1000/example --download --download-source unpaywall
 lam search --root D:\ResearchLibrary --doi 10.1000/example --download --dry-run
 lam file --root D:\ResearchLibrary --dry-run
 lam file --root D:\ResearchLibrary --json
+lam cleanup --root D:\ResearchLibrary --dry-run
+lam cleanup --root D:\ResearchLibrary --apply
 ```
 
 `search --dry-run` performs real provider queries and may update the metadata
@@ -60,19 +69,78 @@ dry run selects and reports a plan but does not request the PDF or create a
 temporary file. Use `--max-download-size MB`, `--download-timeout SECONDS`, or
 `--download-source {auto,arxiv,unpaywall}` to apply narrower bounds.
 
-Workflow 3 uses `pypdf` first and invokes EasyOCR only when the first-page text
-is missing, too short, abnormal, or lacks identification candidates. OCR is
-limited to page 1 and preserves bounding boxes and confidence. Its title and
-identifier output remains supporting evidence: fuzzy OCR titles and corrected
-DOIs do not independently authorize registration, and disagreement with the
-embedded PDF text is blocked for review. `--skip-pdf-text` and
-`--filename-only` disable both page-text extraction and OCR.
+Workflow 3 uses progressive identification and retries existing `LOCAL:` rows.
+User-confirmed identity, catalogue PMID/DOI/arXiv identifiers, PDF identifiers,
+catalogue title evidence, filename evidence, bounded `pypdf`, and first-page
+EasyOCR are attempted in that order. Provider, catalogue, PDF, and confirmation
+evidence are merged before the durable identity check, so a provider response
+does not need to repeat fields already established locally. Conservative
+first-page metadata extraction may fill blank title, author, year, journal,
+DOI, PMID, and publication-type cells after provider failure; it never invents
+abstracts or keywords and never overwrites populated fields. Common journal-name
+variants are recorded as notes instead of identity conflicts.
+
+Every processed unresolved PDF receives a stable `LOCAL:` provisional row,
+stays in `Inbox/`, and carries at most one active paper-identity review blocker.
+`USER_CONFIRMED`, `USER_CONFIRMED:`, and field-specific confirmation forms are
+recognized; an empty confirmed value still clears the corresponding blocker.
+Deleting a snapshotted machine blocker authorizes one retry with the same
+evidence and does not immediately recreate it. Materially new evidence may
+raise one new blocker. A later durable identity upgrades the same row rather
+than creating another one. `--skip-pdf-text` and `--filename-only` disable
+page-text extraction and OCR but still permit catalogue/filename matching and
+provisional recording.
+
+Every machine-maintained row now has an immutable UUID `record_uid`, while the
+user-facing `id` is upgraded by priority (`PMID:`, `DOI:`, `ARXIV:`, then
+`LOCAL:`). After an exact provider match, one canonicalization step normalizes
+the identifier, provider fields, official journal title/abbreviation, and the
+single primary `source` (`pubmed`, `arxiv`, `unpaywall`, or `local_pdf`). Field
+provenance remains in reports and caches rather than accumulating in `source`.
+
+Workflow 2 can revisit registered records without scanning or moving their
+PDFs. `search --incomplete-records` selects identifier-backed rows missing
+metadata; `search --normalize-existing` performs exact-identifier
+canonicalization. `normalize-records` is the migration entry point: dry-run
+previews Catalogue changes, while apply mode adds missing `record_uid` values,
+upgrades canonical IDs and sources, and runs one final check. It never invokes
+Workflow 4 or moves PDFs. Filename changes implied by canonical metadata are
+reported as a separate plan only.
 
 `lam doctor` checks pdf2image, Poppler, EasyOCR, Torch/CUDA, local model
 availability, and temporary-directory access. EasyOCR model downloads are
 disabled by default (`OCR_DOWNLOAD_ENABLED=false`), so Workflow 3 never starts
 an implicit large download. If an explicit one-time initialization is desired,
 temporarily enable that setting and run `lam doctor`, then disable it again.
+
+`publication_type` stores one canonical special genre only. Ordinary research
+articles and provider/index labels such as `Journal Article`,
+`Research Support, ...`, and Unpaywall `journal-article` are omitted. Known
+special genres such as `Review`, `Systematic Review`, `Meta-analysis`, and
+`Erratum` remain available for standard filenames. Provider raw values stay in
+metadata caches and field provenance rather than the catalogue cell.
+
+`repair-publication-types --dry-run` reports old/new types and filenames,
+title-truncation changes, and collision blockers without modifying the
+catalogue, snapshots, operation journals, change log, or PDFs. Apply mode
+backs up `catalogue.xlsx`, normalizes all type cells, safely renames only direct
+children of `Registered/`, and runs one Workflow 1 final check.
+
+Workflow 4 accepts registered PDFs from `Registered/` and already filed PDFs
+from ordinary top-level topic folders. It trusts the Catalogue path and
+filename, does not inspect PDF content or call Workflow 2, preserves the
+filename, blocks target collisions, and runs one final check. After a successful
+topic-to-topic move it removes only the old top-level topic directory when that
+directory is truly empty; a directory containing `summary.md`, hidden files, or
+any other content is retained.
+
+`cleanup --dry-run` reports only strictly allowlisted machine-generated
+artifacts and estimated recoverable bytes. `cleanup --apply` enforces retention
+for Catalogue backups, reports, rotated logs, completed operation journals,
+stale temporary files, expired metadata cache entries, and old snapshot
+generations. It never selects PDFs, `catalogue.xlsx`, project instructions,
+`summary.md`, ordinary topic folders, unfinished journals, or files outside the
+explicit maintenance roots.
 
 ## Network configuration
 
@@ -83,7 +151,7 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.3.2
+HTTP_USER_AGENT=LAM/0.4.2
 DOWNLOAD_ENABLED=true
 DOWNLOAD_MAX_BYTES=157286400
 DOWNLOAD_TIMEOUT_SECONDS=120

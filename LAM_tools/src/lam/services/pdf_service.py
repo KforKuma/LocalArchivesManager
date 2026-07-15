@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import re
+from dataclasses import asdict
 from dataclasses import replace
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -11,6 +12,7 @@ from pypdf import PdfReader
 from ..config import Settings
 from ..models import IdentifierCandidate, OcrInspection, PdfInspection, TitleCandidate
 from ..utils.identifiers import extract_doi_candidates, extract_pmid_candidates
+from ..utils.local_pdf_metadata import extract_local_pdf_metadata
 from ..utils.text import (
     clean_metadata_title,
     is_probable_supplement,
@@ -96,6 +98,7 @@ class PdfService:
                         "high",
                         "metadata",
                         None,
+                        "pdf_document_metadata",
                     )
                 )
 
@@ -205,7 +208,13 @@ class PdfService:
             filename_title = self._title_from_filename(resolved.name)
             if filename_title:
                 result.title_candidates.append(
-                    TitleCandidate(filename_title, "medium", "filename", None)
+                    TitleCandidate(
+                        filename_title,
+                        "medium",
+                        "filename",
+                        None,
+                        "standard_filename",
+                    )
                 )
             result.doi_candidates = self._unique_identifiers(result.doi_candidates)
             result.pmid_candidates = self._unique_identifiers(result.pmid_candidates)
@@ -213,6 +222,22 @@ class PdfService:
             result.year_candidates = sorted(
                 set(re.findall(r"\b(?:19|20)\d{2}\b", metadata_text + "\n" + result.sampled_text))
             )
+            local_metadata = extract_local_pdf_metadata(
+                first_page_text=result.first_page_text,
+                filename=result.filename,
+                title_candidates=[
+                    item.value
+                    for item in result.title_candidates
+                    if not item.source_type.startswith("ocr")
+                ],
+                doi_candidates=[
+                    item.value
+                    for item in result.doi_candidates
+                    if item.source_type != "ocr_corrected"
+                ],
+                pmid_candidates=[item.value for item in result.pmid_candidates],
+            )
+            result.local_metadata = asdict(local_metadata)
             result.is_probable_supplement = is_probable_supplement(
                 result.filename,
                 result.metadata_title,

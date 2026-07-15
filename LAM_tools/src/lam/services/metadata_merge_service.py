@@ -21,6 +21,8 @@ from ..models import (
 )
 from ..utils.identifiers import normalize_arxiv_id, normalize_doi, normalize_pmid
 from ..utils.text import normalize_title
+from ..utils.title_matching import tolerant_title_score
+from ..utils.publication_type import canonicalize_publication_type
 
 
 PROVIDER_PRIORITY = {"pubmed": 0, "arxiv": 1, "unpaywall": 2}
@@ -94,6 +96,21 @@ class MetadataMergeService:
                 conflicts,
             )
         merged = self._merge_group(group)
+        type_result = merged.publication_type_result()
+        for warning in type_result.warnings:
+            conflicts.append(
+                MetadataConflict(
+                    "publication_type",
+                    {
+                        source: list(record.raw_publication_types)
+                        for record in group
+                        for source in record.source
+                        if record.raw_publication_types
+                    },
+                    warning,
+                    False,
+                )
+            )
         confidence, reason = self._confidence(request, group)
         return MetadataLookupResult(
             status=MetadataLookupStatus.FOUND,
@@ -181,8 +198,8 @@ class MetadataMergeService:
         query = normalize_title(request.title)
         plausible = []
         for group in groups:
-            score = max(title_ratio(query, normalize_title(item.title)) for item in group)
-            if score < 92:
+            score = max(tolerant_title_score(query, item.title) for item in group)
+            if score < 0.92:
                 continue
             if request.year and not any(
                 not item.year or abs(int(item.year) - int(request.year)) <= 1
@@ -266,11 +283,19 @@ class MetadataMergeService:
                 if value:
                     setattr(merged, field, deepcopy(value))
                     break
-        for field in ("authors", "publication_type", "keywords", "mesh_terms", "categories"):
+        for field in ("authors", "keywords", "mesh_terms", "categories"):
             values = []
             for record in ordered:
                 values.extend(getattr(record, field))
             setattr(merged, field, list(dict.fromkeys(values)))
+        raw_publication_types = []
+        for record in ordered:
+            raw_publication_types.extend(record.raw_publication_types)
+            if record.publication_type:
+                raw_publication_types.append(record.publication_type)
+        type_result = canonicalize_publication_type(raw_publication_types)
+        merged.raw_publication_types = list(type_result.raw_types)
+        merged.publication_type = type_result.canonical_type
         merged.source = list(dict.fromkeys(source for record in ordered for source in record.source))
         merged.source_ids = {
             key: value for record in ordered for key, value in record.source_ids.items()

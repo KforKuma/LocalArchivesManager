@@ -82,6 +82,7 @@ def title_candidates_from_page(
                     confidence="high" if page == 1 and len(joined) >= 20 else "medium",
                     source_type="page_top",
                     page=page,
+                    evidence=f"page_{page}_top_lines",
                 )
             )
         if len(joined) >= max_length:

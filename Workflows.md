@@ -67,6 +67,7 @@ The catalogue should contain one row per paper.
 
 ```text
 id
+record_uid
 title
 authors
 year
@@ -92,6 +93,16 @@ uncertainty
 ```
 
 Do not remove existing columns.
+
+`record_uid` is an immutable machine UUID for stable row association. `id` is
+the user-facing paper identifier and may be upgraded by priority:
+
+```text
+PMID:<pmid> > DOI:<doi> > ARXIV:<arxiv_id> > LOCAL:<uuid>
+```
+
+Snapshots, review decisions, and new operation journals prefer `record_uid`
+and retain row-number compatibility for pre-0.4.1 state.
 
 Duplicate detection order:
 
@@ -217,6 +228,26 @@ Use this mode when both snapshots exist.
 7. Refresh the accepted snapshots after successful completion.
 
 Unchanged files must not be re-read or reprocessed.
+
+### File-difference classification
+
+Treat `quick_hash` only as a candidate hint. It must not by itself establish
+paper identity or create a collision review item.
+
+- A completed Workflow 3/4 journal entry, disappearance of the old path,
+  appearance of the new path, and a matching fingerprint classify the change
+  as `expected_move_or_rename`.
+- A same-path size or modification-time change is `modified`.
+- A hash-only one-to-one path candidate is internal
+  `quick_hash_candidate`; it does not enter `NEEDS_REVIEW:`.
+- Compute a full hash only when current files coexist with the same quick hash
+  or a target collision otherwise needs resolution.
+- Use `possible_collision` only for real coexistence, target conflicts, or
+  cases where full state cannot prove the files distinct.
+
+Known movements from the current operation journal must be classified before
+generic quick-hash candidates so the final check does not re-report the
+workflow's own rename or move as a collision.
 
 ---
 
@@ -371,6 +402,21 @@ Rules:
 6. Do not assign a final `topic_folder` unless the user has already supplied it.
 7. Add new rows at the bottom.
 
+After accepting a unique high-confidence provider record, canonicalize the
+whole machine-owned identity before writing. PubMed journal title maps to
+`journal`, ISO abbreviation maps to `journal_abbrev`, and equivalent legacy
+placement is corrected without a note or blocker. `source` stores only the
+current primary canonical source in this priority order:
+
+```text
+pubmed > arxiv > unpaywall > local_pdf
+```
+
+Use `--incomplete-records` to complete identifier-backed rows with missing
+metadata. Use `--normalize-existing` for exact PMID/DOI/arXiv re-query and
+canonicalization. These modes may update registered Catalogue rows but do not
+scan or move files in `Registered/` and never invoke Workflow 4.
+
 ---
 
 ## Optional download mode
@@ -464,11 +510,14 @@ Run only when explicitly requested by the user.
 
 A request to run Workflow 3 authorizes routine high-confidence renaming and movement from `Inbox/` to `Registered/`.
 
-The phase-3 implementation processes only direct, non-hidden `.pdf` children
-of `Inbox/`. It uses bounded `pypdf` inspection and local catalogue matching,
-then calls the replaceable Workflow 2 metadata service only when local evidence
-is insufficient. Provider results must be unique and high-confidence before a
-new catalogue row is created or registration continues.
+The implementation processes only direct, non-hidden `.pdf` children of
+`Inbox/`. Existing provisional rows are retried by preferring user-confirmed
+identity, catalogue identifiers, PDF identifiers, catalogue title evidence,
+and only then filename and progressively more expensive PDF evidence. Bounded
+`pypdf` inspection and OCR remain fallbacks. Provider, catalogue, PDF, and user
+confirmation evidence are merged before the durable identity decision;
+identifier conflicts remain hard blockers. Every processed unresolved PDF
+receives a stable provisional catalogue row and remains in `Inbox/`.
 
 ### First-page OCR fallback
 
@@ -518,22 +567,36 @@ warnings, and selected evidence—not the full recognized page text.
 
 For each candidate file:
 
-1. Inspect the filename and safe machine-readable PDF metadata.
-2. If the filename already follows the standard convention, attempt direct catalogue matching.
-3. Otherwise extract the article title or identifiers from the PDF.
-4. Match against existing catalogue records.
-5. If no adequate record exists, call Workflow 2 to search and add or complete the record.
-6. Confirm that the PDF-paper match is high confidence.
-7. Generate a safe standard filename.
-8. Update:
+1. Find an existing catalogue or `LOCAL:` provisional row by path and filename.
+2. Parse relevant `USER_CONFIRMED` identity instructions and existing catalogue
+   PMID, DOI, arXiv ID, title, authors, year, and journal evidence.
+3. Extract DOI, PMID, arXiv ID, title, year, and journal clues from the filename.
+4. Query Workflow 2 in this order: confirmed identity, catalogue PMID,
+   catalogue DOI, catalogue arXiv ID, PDF identifiers, supported catalogue
+   title, filename, embedded PDF evidence, then OCR evidence.
+5. Stop content extraction when merged evidence confirms a unique durable
+   identity; a provider record alone is not treated as the only authority.
+6. Otherwise inspect PDF metadata and bounded page text with `pypdf`.
+7. Repeat local matching or Workflow 2 lookup with the additional evidence.
+8. Only when that evidence remains insufficient, OCR page 1 and retry matching.
+9. If provider lookup is unavailable, fails, or finds nothing, conservatively
+   parse first-page local metadata and fill only blank identification fields.
+10. Confirm that the combined PDF-paper evidence meets the high-confidence threshold.
+11. Canonicalize `record_uid`, user-facing `id`, provider metadata, PubMed
+    journal fields, publication type, and the single primary `source`.
+12. Generate a safe standard filename.
+13. Update:
    - `pdf_status`;
    - `pdf_filename`;
    - `pdf_relative_path`;
    - relevant missing metadata;
    - `date_updated`;
    - `uncertainty`, when needed.
-9. Rename the file.
-10. Move it to `Registered/`.
+14. Rename the file.
+15. Move it to `Registered/`.
+16. If identity remains unconfirmed, create or update one stable `LOCAL:` row,
+    set its observed Inbox path/status, add one paper-identity blocker, and leave
+    the PDF in `Inbox/`.
 
 Before applying ready operations, write a recoverable journal under
 `.library_state/runs/<run_id>/operation_journal.json`. Update it through
@@ -567,9 +630,17 @@ Leave the file in `Inbox/` when:
 For unresolved files:
 
 - preserve the file;
-- add or update `NEEDS_REVIEW:` in the relevant catalogue row when possible;
-- otherwise report the file as unmatched;
+- create or update a stable provisional row when no unique row is known;
+- add or update one `NEEDS_REVIEW:` paper-identity blocker;
 - continue processing other eligible files.
+
+Local first-page metadata fallback may fill blank `title`, `authors`, `year`,
+`journal`, `doi`, `pmid`, and `publication_type` values only. It must preserve
+all populated cells and user-controlled content, record its use in `source` or
+`uncertainty`, and must not manufacture catalogue `abstract` or `keywords`
+values. Common short/full journal-name variants, including a base journal name
+with an indexed parenthetical qualifier, are compatible evidence and receive a
+machine note rather than a review blocker.
 
 ---
 
@@ -687,6 +758,105 @@ Please review catalogue.xlsx before running Workflow 4.
 
 ---
 
+# Maintenance workflow: Record normalization
+
+Run explicitly with:
+
+```text
+lam normalize-records --dry-run
+lam normalize-records
+```
+
+This migration assigns missing immutable `record_uid` values to all Catalogue
+rows, then uses existing PMID, DOI, or arXiv identifiers for exact provider
+queries. Accepted records receive canonical IDs, canonical primary `source`,
+provider title/author/year fields where safe, and correct journal title and
+abbreviation placement. It preserves user-controlled fields, every
+`USER_CONFIRMED` line, and arbitrary user text.
+
+Dry-run may query providers and write an ordinary report/cache entry but must
+not save `catalogue.xlsx`, create a backup or operation journal, move PDFs, or
+commit snapshots. Apply mode backs up the Catalogue, writes a record-UID-aware
+operation journal and change-log entry, and runs Workflow 1 exactly once in
+final-check mode. It never scans or moves `Registered/` or topic-folder PDFs.
+If canonical naming metadata changes, report the implication only; filename
+repair remains a separate explicitly requested operation.
+
+---
+
+# Maintenance workflow: Publication type repair
+
+## Trigger
+
+Run explicitly with:
+
+```text
+lam repair-publication-types --dry-run
+lam repair-publication-types
+```
+
+## Canonical publication type
+
+Provider values and catalogue values are passed through one shared
+canonicalizer. Raw provider values remain in metadata cache and provenance;
+`catalogue.xlsx` stores at most one canonical special genre.
+
+Ordinary article and indexing values, including `Journal Article`,
+`journal-article`, `Research Article`, and `Research Support, ...`, map to an
+empty canonical value and are omitted from filenames. Recognized special
+genres include:
+
+```text
+Review
+Systematic Review
+Meta-analysis
+Erratum
+Retraction
+Editorial
+Commentary
+Letter
+Guideline
+Protocol
+Case Report
+```
+
+When multiple special genres are present, use the documented priority order.
+Equally ranked incompatible genres create `publication_type_conflict`.
+Unknown values are omitted from filenames and create
+`publication_type_unrecognized`; raw provider values must not be copied into
+`uncertainty`.
+
+## Repair behavior
+
+Dry-run reports old/new types, old/new filenames, title truncation changes,
+and blockers without modifying managed files, the catalogue, snapshots,
+operation journals, or the change log.
+
+Apply mode:
+
+1. normalizes every existing `publication_type` cell;
+2. generates names from the full canonical title, truncating only the title
+   portion when the complete filename would exceed 180 characters;
+3. renames only direct PDF children of `Registered/`;
+4. refuses different-content target collisions and revalidates source
+   size/mtime immediately before each no-overwrite rename;
+5. leaves topic-folder PDFs in place and reports any proposed name;
+6. updates `publication_type`, `pdf_filename`, `pdf_relative_path`, and
+   `date_updated` while preserving all user-controlled fields;
+7. backs up `catalogue.xlsx`, writes a recoverable operation journal and change
+   log entry, and runs Workflow 1 exactly once in final-check mode.
+
+Repair uncertainty keys are limited to:
+
+```text
+publication_type_conflict
+publication_type_unrecognized
+publication_type_repair_collision
+publication_type_file_missing
+```
+
+---
+
 # Workflow 4: Catalogue-based filing
 
 ## Trigger
@@ -703,21 +873,26 @@ A request to run Workflow 4 authorizes routine high-confidence file movements ba
 ## Purpose
 
 1. Compare intended `topic_folder` values with observed `pdf_relative_path` values.
-2. Move eligible PDFs directly from `Registered/` into their confirmed topic folders.
+2. Move eligible PDFs from `Registered/` or an ordinary top-level topic folder
+   into their confirmed topic folder.
 3. Update location and lifecycle fields.
-4. Leave unresolved or unclassified files in `Registered/`.
+4. Leave unresolved or unclassified files in place.
+5. Remove the old ordinary top-level topic folder only when it becomes truly empty.
 
 Workflow 4 handles location only.
 
 Workflow 4 must never move files from `Inbox/`. Files in `Inbox/` remain under
-Workflow 2/3 authority. Files already in topic folders are checked by Workflow 1
-but are not moved by Workflow 4.
+Workflow 2/3 authority. It accepts only catalogue-registered direct PDF children
+of `Registered/` or ordinary top-level topic directories. It rejects hidden and
+management directories, `LAM_tools/`, `scripts/`, `build/`, `dist/`, nested
+paths, non-PDF files, and paths outside the library root.
 
 It must not:
 
 - query PubMed or arXiv;
 - complete bibliographic metadata;
-- rename PDFs except when required to preserve the already approved standard filename during the move;
+- read PDF content or repeat paper identification;
+- regenerate or change the approved `pdf_filename`;
 - inspect or modify `summary.md`;
 - infer final folders from `auto_tags` or `suggested_topic`.
 
@@ -750,7 +925,7 @@ For each local PDF with a matched catalogue row:
 3. determine whether movement is needed;
 4. verify that the target path is safe;
 5. verify that no different-content filename collision exists;
-6. move the file;
+6. move the file without changing its name;
 7. update:
    - `pdf_status = filed`;
    - `pdf_filename`;
@@ -760,8 +935,8 @@ For each local PDF with a matched catalogue row:
 
 If `topic_folder` is empty or `Unclassified`:
 
-- leave the file in `Registered/`;
-- set or preserve `pdf_status = registered`;
+- leave the file in its current location;
+- preserve an already filed status or set a Registered file to `registered`;
 - do not create a new topic folder;
 - add `NEEDS_REVIEW:` only when user input is actually required.
 
@@ -782,12 +957,32 @@ Do not merge folders.
 
 ---
 
-## Files outside Registered
+## Re-filing and old-folder cleanup
 
-Workflow 4 must not move a file whose observed location is outside `Registered/`.
-If a catalogue row points to `Inbox/`, another topic folder, or a management
-directory, leave the file in place and report the discrepancy for Workflow 1 or
-the appropriate registration workflow.
+When an eligible PDF is already in an ordinary top-level topic folder and that
+folder differs from `topic_folder`, classify the successful move as
+`refiled_from_topic`. A successful move from `Registered/` is
+`filed_from_registered`.
+
+After a topic-to-topic move, check only the old top-level directory. Remove it
+with a non-recursive empty-directory operation only if it is truly empty. Keep
+it when it contains `summary.md`, a hidden entry, or any other content. Never
+remove `Inbox/`, `Registered/`, `LAM_tools/`, `scripts/`, `build/`, `dist/`, a
+hidden/management directory, a nested directory, or a path outside the root.
+Record every removed empty directory in the operation journal and report.
+
+Per-record result classifications are:
+
+```text
+filed_from_registered
+refiled_from_topic
+already_correct
+unclassified
+source_missing
+target_collision
+unsafe_source
+unsafe_target
+```
 
 ---
 
@@ -799,8 +994,9 @@ the appropriate registration workflow.
 Catalogue rows checked:
 Files moved:
 Already correctly filed:
-Left in Registered:
-Files outside Registered skipped:
+Unclassified files left in place:
+Unsafe or missing sources skipped:
+Empty old topic directories removed:
 
 ## Created folders
 
@@ -816,6 +1012,45 @@ Files outside Registered skipped:
 ```
 
 After Workflow 4 finishes, run Workflow 1 once in final-check mode.
+
+---
+
+# Maintenance cleanup
+
+## Trigger and commands
+
+Run only when explicitly requested:
+
+```text
+lam cleanup --dry-run
+lam cleanup --apply
+```
+
+Dry run reports each candidate, its reason, and estimated recoverable bytes
+without deleting it. Apply mode removes only candidates selected by the same
+strict allowlist and writes a maintenance report and change-log entry.
+
+## Allowlist and retention
+
+Eligible machine-generated artifacts are limited to:
+
+- `catalogue.backup.*.xlsx`: keep the latest 10 and every backup from the last
+  30 days;
+- `.library_state/reports/`: keep the latest 200 report groups and every report
+  from the last 90 days;
+- `.library_state/logs/`: keep the active log and five rotated logs;
+- `.library_state/runs/`: remove only successfully completed journals older
+  than 30 days; never remove failed, incomplete, or unreadable journals;
+- `.library_state/tmp/`: remove stale successful-task artifacts;
+- expired metadata-cache entries according to their recorded TTL;
+- snapshot-generation backups other than the active and immediately previous
+  generations.
+
+Cleanup must never select a PDF, `catalogue.xlsx`, `AGENTS.md`, `Workflows.md`,
+`summary.md`, ordinary topic content, symlink/reparse content, or anything
+outside these explicit maintenance roots. It must not infer deletability from a
+generic wildcard, and it must not recursively delete an allowlisted directory
+that contains protected or unrecognized content.
 
 ---
 
@@ -840,6 +1075,11 @@ USER_CONFIRMED: field=topic_folder; value=T_cell; note=Keep this classification.
 ```
 
 do not repeatedly question that decision unless materially new conflicting evidence appears.
+
+For paper identity, the shorthand forms `USER_CONFIRMED` and
+`USER_CONFIRMED:` are equivalent to a confirmation with
+`field=paper_identity`. Field-specific forms may include a value, and an empty
+confirmed value is still an explicit decision. Preserve the original user text.
 
 Prefer one current concise review entry over multiple repetitive machine warnings.
 

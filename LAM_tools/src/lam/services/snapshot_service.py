@@ -11,7 +11,8 @@ from typing import Any
 
 from ..exceptions import FileOperationError
 from ..models import DiffType, FileDiff, FileSnapshot
-from ..utils.hashing import quick_hash
+from ..services.journal_service import completed_file_movements
+from ..utils.hashing import full_hash, quick_hash
 from ..utils.normalize import normalized_relative_path, normalized_text
 
 
@@ -149,14 +150,23 @@ class SnapshotService:
         for key in sorted(common):
             old = previous[key]
             new = current[key]
-            if old.size == new.size and old.quick_hash == new.quick_hash:
+            if (
+                old.size == new.size
+                and old.mtime_ns == new.mtime_ns
+                and old.quick_hash == new.quick_hash
+            ):
                 unchanged += 1
             else:
                 diffs.append(
                     FileDiff(
                         DiffType.MODIFIED,
                         path=new.relative_path,
-                        details={"old_size": old.size, "new_size": new.size},
+                        details={
+                            "old_size": old.size,
+                            "new_size": new.size,
+                            "old_mtime_ns": old.mtime_ns,
+                            "new_mtime_ns": new.mtime_ns,
+                        },
                     )
                 )
 
@@ -164,11 +174,40 @@ class SnapshotService:
         added = {key: current[key] for key in current.keys() - previous.keys()}
         matched_removed: set[str] = set()
         matched_added: set[str] = set()
+
+        for movement in completed_file_movements(self.state_dir, self.library_root):
+            old_key = normalized_relative_path(movement["source"])
+            new_key = normalized_relative_path(movement["target"])
+            if old_key not in removed or new_key not in added:
+                continue
+            old_item = removed[old_key]
+            new_item = added[new_key]
+            if old_item.size != new_item.size or old_item.quick_hash != new_item.quick_hash:
+                continue
+            matched_removed.add(old_key)
+            matched_added.add(new_key)
+            diffs.append(
+                FileDiff(
+                    DiffType.EXPECTED_MOVE_OR_RENAME,
+                    old_path=old_item.relative_path,
+                    new_path=new_item.relative_path,
+                    details={
+                        "matched_by": "operation_journal",
+                        "run_id": movement.get("run_id"),
+                        "workflow": movement.get("workflow"),
+                    },
+                )
+            )
+
         removed_by_filename: dict[str, list[str]] = defaultdict(list)
         added_by_filename: dict[str, list[str]] = defaultdict(list)
         for key, item in removed.items():
+            if key in matched_removed:
+                continue
             removed_by_filename[normalized_text(item.filename)].append(key)
         for key, item in added.items():
+            if key in matched_added:
+                continue
             added_by_filename[normalized_text(item.filename)].append(key)
 
         for filename in removed_by_filename.keys() & added_by_filename.keys():
@@ -225,17 +264,59 @@ class SnapshotService:
             new_keys = added_by_fingerprint[fingerprint]
             matched_removed.update(old_keys)
             matched_added.update(new_keys)
+            if len(old_keys) == 1 and len(new_keys) == 1:
+                diffs.append(
+                    FileDiff(
+                        DiffType.QUICK_HASH_CANDIDATE,
+                        old_path=removed[old_keys[0]].relative_path,
+                        new_path=added[new_keys[0]].relative_path,
+                        details={"matched_by": "quick_hash_candidate"},
+                    )
+                )
+            else:
+                diffs.append(
+                    FileDiff(
+                        DiffType.POSSIBLE_COLLISION,
+                        details={
+                            "matched_by": "ambiguous_quick_hash_candidates",
+                            "old_paths": [removed[key].relative_path for key in old_keys],
+                            "new_paths": [added[key].relative_path for key in new_keys],
+                        },
+                    )
+                )
+
+        current_by_fingerprint: dict[tuple[int, str], list[str]] = defaultdict(list)
+        for key, item in current.items():
+            current_by_fingerprint[(item.size, item.quick_hash)].append(key)
+        original_added = set(added)
+        for keys in current_by_fingerprint.values():
+            if len(keys) < 2 or not (set(keys) & original_added):
+                continue
+            hashes: list[str] = []
+            hash_failed = False
+            for key in keys:
+                item = current[key]
+                try:
+                    item.full_hash = item.full_hash or full_hash(
+                        self.library_root / item.relative_path
+                    )
+                    hashes.append(item.full_hash)
+                except OSError:
+                    hash_failed = True
+                    break
+            if not hash_failed and len(set(hashes)) > 1:
+                continue
             diffs.append(
                 FileDiff(
                     DiffType.POSSIBLE_COLLISION,
                     details={
-                        "matched_by": "quick_hash_candidate",
-                        "issue": "possible_rename_requires_review",
-                        "old_paths": [removed[key].relative_path for key in old_keys],
-                        "new_paths": [added[key].relative_path for key in new_keys],
+                        "matched_by": "coexisting_files",
+                        "paths": [current[key].relative_path for key in keys],
+                        "full_hash_status": "unavailable" if hash_failed else "identical",
                     },
                 )
             )
+            matched_added.update(set(keys) & original_added)
 
         for key, item in sorted(removed.items()):
             if key not in matched_removed:
@@ -247,30 +328,84 @@ class SnapshotService:
 
     @staticmethod
     def compare_catalogue(previous: dict[str, Any], current: dict[str, Any]) -> list[dict[str, Any]]:
-        old_rows = {row["row_number"]: row.get("fields", {}) for row in previous.get("rows", [])}
-        new_rows = {row["row_number"]: row.get("fields", {}) for row in current.get("rows", [])}
+        old_rows = list(previous.get("rows", []))
+        new_rows = list(current.get("rows", []))
+        old_by_uid = {
+            normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid")): index
+            for index, row in enumerate(old_rows)
+            if normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid"))
+        }
+        new_by_uid = {
+            normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid")): index
+            for index, row in enumerate(new_rows)
+            if normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid"))
+        }
+        paired: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        matched_old: set[int] = set()
+        matched_new: set[int] = set()
+        for uid in old_by_uid.keys() & new_by_uid.keys():
+            old_index, new_index = old_by_uid[uid], new_by_uid[uid]
+            matched_old.add(old_index)
+            matched_new.add(new_index)
+            paired.append((old_rows[old_index], new_rows[new_index]))
+        remaining_old_by_row = {
+            row.get("row_number"): index
+            for index, row in enumerate(old_rows)
+            if index not in matched_old
+        }
+        remaining_new_by_row = {
+            row.get("row_number"): index
+            for index, row in enumerate(new_rows)
+            if index not in matched_new
+        }
+        for row_number in remaining_old_by_row.keys() & remaining_new_by_row.keys():
+            old_index = remaining_old_by_row[row_number]
+            new_index = remaining_new_by_row[row_number]
+            matched_old.add(old_index)
+            matched_new.add(new_index)
+            paired.append((old_rows[old_index], new_rows[new_index]))
+
         changes: list[dict[str, Any]] = []
-        for row_number in sorted(old_rows.keys() | new_rows.keys()):
-            old = old_rows.get(row_number)
-            new = new_rows.get(row_number)
+        for old_row, new_row in sorted(
+            paired, key=lambda pair: int(pair[1].get("row_number") or pair[0].get("row_number") or 0)
+        ):
+            old = old_row.get("fields", {})
+            new = new_row.get("fields", {})
             if old == new:
                 continue
-            if old is None:
-                changes.append({"row_number": row_number, "change": "row_added"})
-            elif new is None:
-                changes.append({"row_number": row_number, "change": "row_missing"})
-            else:
-                for field_name in sorted(old.keys() | new.keys()):
-                    if old.get(field_name) != new.get(field_name):
-                        changes.append(
-                            {
-                                "row_number": row_number,
-                                "change": "field_changed",
-                                "field": field_name,
-                                "old": old.get(field_name),
-                                "new": new.get(field_name),
-                            }
-                        )
+            for field_name in sorted(old.keys() | new.keys()):
+                if old.get(field_name) != new.get(field_name):
+                    changes.append(
+                        {
+                            "row_number": new_row.get("row_number"),
+                            "record_uid": new_row.get("record_uid")
+                            or new.get("record_uid")
+                            or old_row.get("record_uid")
+                            or old.get("record_uid"),
+                            "change": "field_changed",
+                            "field": field_name,
+                            "old": old.get(field_name),
+                            "new": new.get(field_name),
+                        }
+                    )
+        for index, row in enumerate(old_rows):
+            if index not in matched_old:
+                changes.append(
+                    {
+                        "row_number": row.get("row_number"),
+                        "record_uid": row.get("record_uid") or row.get("fields", {}).get("record_uid"),
+                        "change": "row_missing",
+                    }
+                )
+        for index, row in enumerate(new_rows):
+            if index not in matched_new:
+                changes.append(
+                    {
+                        "row_number": row.get("row_number"),
+                        "record_uid": row.get("record_uid") or row.get("fields", {}).get("record_uid"),
+                        "change": "row_added",
+                    }
+                )
         return changes
 
     def commit(

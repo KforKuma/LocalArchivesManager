@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, replace
 from datetime import date, datetime
+from pathlib import PurePosixPath
 from typing import Any
 
 from .. import __version__
@@ -21,10 +22,13 @@ from ..services.download_service import DownloadService
 from ..services.journal_service import OperationJournal, incomplete_journals
 from ..services.metadata_service import CompositeMetadataLookupService
 from ..services.report_service import ReportService, append_change_log
+from ..services.record_canonicalization_service import RegisteredRecordCanonicalizer
 from ..services.snapshot_service import SnapshotService
 from ..utils.identifiers import normalize_doi, normalize_pmid
+from ..utils.filename import standard_pdf_filename_result
 from ..utils.normalize import normalized_text
 from ..utils.text import normalize_title
+from ..utils.uncertainty import confirmed_value
 from .daily_check import DailyCheckWorkflow
 
 
@@ -38,6 +42,7 @@ class MetadataQueryWorkflow:
         self.settings = settings
         self.metadata_service = metadata_service or CompositeMetadataLookupService(settings)
         self.download_service = download_service or DownloadService(settings)
+        self.canonicalizer = RegisteredRecordCanonicalizer()
 
     def run(
         self,
@@ -47,23 +52,41 @@ class MetadataQueryWorkflow:
         catalogue_row: int | None = None,
         catalogue_id: str | None = None,
         missing_metadata: bool = False,
+        incomplete_records: bool = False,
+        normalize_existing: bool = False,
         max_records: int = 25,
         nested: bool = False,
+        workflow_name: str = "metadata_query",
         download: bool = False,
         download_source: str = "auto",
         max_download_size_mb: float | None = None,
         download_timeout: float | None = None,
     ) -> WorkflowResult:
         result = WorkflowResult(
-            "metadata_query", dry_run=dry_run, mode="dry_run" if dry_run else "apply"
+            workflow_name, dry_run=dry_run, mode="dry_run" if dry_run else "apply"
         )
         catalogue = CatalogueService(self.settings.catalogue_path)
         records = catalogue.load()
         snapshots = SnapshotService(self.settings.library_root, self.settings.state_dir)
         previous = snapshots.load_catalogue_snapshot() if snapshots.initialized else {}
         catalogue.configure_review_state(previous)
+        record_uids_assigned = 0
+        if normalize_existing:
+            for record in records:
+                if not record.get("record_uid"):
+                    catalogue.ensure_record_uid(record)
+                    record_uids_assigned += 1
+                    result.completed.append(
+                        {
+                            "action": (
+                                "would_assign_record_uid" if dry_run else "assigned_record_uid"
+                            ),
+                            "row": record.row_number,
+                            "record_uid": record.get("record_uid"),
+                        }
+                    )
         for journal in incomplete_journals(self.settings.state_dir):
-            if journal.get("workflow") == "metadata_query":
+            if journal.get("workflow") == workflow_name:
                 result.needs_review.append(
                     {**journal, "issue": "catalogue_write_incomplete"}
                 )
@@ -72,9 +95,11 @@ class MetadataQueryWorkflow:
             catalogue_row=catalogue_row,
             catalogue_id=catalogue_id,
             missing_metadata=missing_metadata,
+            incomplete_records=incomplete_records,
+            normalize_existing=normalize_existing,
             max_records=max_records,
         )
-        if (catalogue_row is not None or catalogue_id or missing_metadata) and not targets:
+        if (catalogue_row is not None or catalogue_id) and not targets:
             result.needs_review.append(
                 {
                     "issue": "metadata_query_target_not_found",
@@ -85,8 +110,24 @@ class MetadataQueryWorkflow:
 
         jobs: list[tuple[CatalogueRecord | None, MetadataLookupRequest]] = []
         if targets:
-            jobs.extend((record, self._request_for_record(request, record)) for record in targets)
-        elif not (catalogue_row is not None or catalogue_id or missing_metadata):
+            jobs.extend(
+                (
+                    record,
+                    self._request_for_record(
+                        request,
+                        record,
+                        exact_only=incomplete_records or normalize_existing,
+                    ),
+                )
+                for record in targets
+            )
+        elif not (
+            catalogue_row is not None
+            or catalogue_id
+            or missing_metadata
+            or incomplete_records
+            or normalize_existing
+        ):
             jobs.append((None, request))
 
         query_reports: list[dict[str, Any]] = []
@@ -103,7 +144,8 @@ class MetadataQueryWorkflow:
 
         lookups = (
             self.metadata_service.lookup_many([job for _, job in jobs])
-            if missing_metadata and hasattr(self.metadata_service, "lookup_many")
+            if (missing_metadata or incomplete_records or normalize_existing)
+            and hasattr(self.metadata_service, "lookup_many")
             else [self.metadata_service.lookup(job) for _, job in jobs]
         )
         for (target, job), lookup in zip(jobs, lookups, strict=True):
@@ -247,6 +289,29 @@ class MetadataQueryWorkflow:
                         field="paper_identity",
                     )
                     query_report["catalogue_action"] = "blocked_low_confidence"
+                if selected_target is not None:
+                    type_result = metadata.publication_type_result()
+                    for warning in type_result.warnings:
+                        if warning not in {
+                            "publication_type_conflict",
+                            "publication_type_unrecognized",
+                        }:
+                            continue
+                        details = (
+                            "Multiple equally ranked publication genres conflict."
+                            if warning == "publication_type_conflict"
+                            else "Publication type contains an unrecognized provider value."
+                        )
+                        self._record_review(
+                            catalogue,
+                            selected_target,
+                            result,
+                            warning,
+                            details,
+                            field="publication_type",
+                        )
+                        if warning not in query_report["issue_keys"]:
+                            query_report["issue_keys"].append(warning)
                 if download:
                     download_report, journal, file_changed = self._process_download(
                         catalogue,
@@ -266,6 +331,40 @@ class MetadataQueryWorkflow:
                 self._handle_lookup_issue(catalogue, target, lookup, result, query_report)
 
         changed_rows = {change.row_number for change in catalogue.changes}
+        filename_implications: list[dict[str, Any]] = []
+        if workflow_name == "record_normalization":
+            for record in records:
+                if record.row_number not in changed_rows:
+                    continue
+                relative = str(record.get("pdf_relative_path") or "").replace("\\", "/")
+                current_filename = str(record.get("pdf_filename") or "")
+                if not relative or not current_filename:
+                    continue
+                proposed = standard_pdf_filename_result(
+                    title=record.get("title"),
+                    year=record.get("year"),
+                    journal_abbrev=record.get("journal_abbrev"),
+                    journal=record.get("journal"),
+                    publication_type=record.get("publication_type"),
+                    max_length=self.settings.max_filename_length,
+                ).filename
+                if proposed and proposed != current_filename:
+                    first_part = PurePosixPath(relative).parts[0] if PurePosixPath(relative).parts else ""
+                    filename_implications.append(
+                        {
+                            "row": record.row_number,
+                            "record_uid": record.get("record_uid") or None,
+                            "current_path": relative,
+                            "current_filename": current_filename,
+                            "proposed_filename": proposed,
+                            "location_scope": (
+                                "registered"
+                                if first_part.casefold() == "registered"
+                                else "topic_folder"
+                            ),
+                            "action": "report_only",
+                        }
+                    )
         result.changed_rows = len(changed_rows)
         result.counts = {
             "queries": len(jobs),
@@ -273,6 +372,7 @@ class MetadataQueryWorkflow:
             "records_added": len(records_added),
             "records_updated": len(records_updated),
             "records_unchanged": len(records_unchanged),
+            "record_uids_assigned": record_uids_assigned,
         }
         result.details = {
             "version": __version__,
@@ -283,10 +383,12 @@ class MetadataQueryWorkflow:
             "records_added": records_added,
             "records_updated": records_updated,
             "records_unchanged": records_unchanged,
+            "record_uids_assigned": record_uids_assigned,
             "conflicts": conflicts,
             "downloads": download_reports,
             "final_check": {},
             "network_failure": bool(result.failures),
+            "filename_implications": filename_implications,
         }
 
         if dry_run:
@@ -299,6 +401,14 @@ class MetadataQueryWorkflow:
             operations = [
                 {
                     "catalogue_row": row,
+                    "record_uid": next(
+                        (
+                            record.get("record_uid") or None
+                            for record in catalogue.records
+                            if record.row_number == row
+                        ),
+                        None,
+                    ),
                     "execution_state": "planned",
                     "changes": [
                         asdict(change) for change in catalogue.changes if change.row_number == row
@@ -309,20 +419,38 @@ class MetadataQueryWorkflow:
             journal = OperationJournal.create(
                 self.settings.state_dir,
                 operations,
-                workflow="metadata_query",
-                suffix="metadata",
+                workflow=workflow_name,
+                suffix="normalize" if workflow_name == "record_normalization" else "metadata",
             )
             backup = catalogue.save_atomic()
             if backup:
                 result.catalogue_backup = str(backup)
             for row in changed_rows:
-                journal.set_operation_state(row, "catalogue_committed")
+                record_uid = next(
+                    (
+                        record.get("record_uid") or None
+                        for record in catalogue.records
+                        if record.row_number == row
+                    ),
+                    None,
+                )
+                journal.set_operation_state(
+                    row, "catalogue_committed", record_uid=record_uid
+                )
 
         if catalogue.changes or result.changed_files:
             append_change_log(
                 self.settings.changes_log_path,
-                workflow="Workflow 2",
-                action="Metadata query, catalogue completion, and controlled OA download",
+                workflow=(
+                    "Record normalization"
+                    if workflow_name == "record_normalization"
+                    else "Workflow 2"
+                ),
+                action=(
+                    "Canonicalize existing catalogue records"
+                    if workflow_name == "record_normalization"
+                    else "Metadata query, catalogue completion, and controlled OA download"
+                ),
                 files_changed=result.changed_files,
                 catalogue_rows_changed=len(changed_rows),
                 reason="Processed high-confidence metadata and explicitly authorized downloads",
@@ -522,13 +650,28 @@ class MetadataQueryWorkflow:
         catalogue_row: int | None,
         catalogue_id: str | None,
         missing_metadata: bool,
-        max_records: int,
+        incomplete_records: bool = False,
+        normalize_existing: bool = False,
+        max_records: int = 25,
     ) -> list[CatalogueRecord]:
         if catalogue_row is not None:
             return [item for item in records if item.row_number == catalogue_row]
         if catalogue_id:
             key = normalized_text(catalogue_id)
             return [item for item in records if normalized_text(item.get("id")) == key]
+        if incomplete_records or normalize_existing:
+            candidates = []
+            for item in records:
+                has_identifier = bool(
+                    normalize_pmid(item.get("pmid"))
+                    or normalize_doi(item.get("doi"))
+                    or MetadataQueryWorkflow._record_arxiv_id(item)
+                )
+                if not has_identifier:
+                    continue
+                if normalize_existing or MetadataQueryWorkflow._record_is_incomplete(item):
+                    candidates.append(item)
+            return candidates[:max_records]
         if missing_metadata:
             candidates = []
             for item in records:
@@ -559,25 +702,59 @@ class MetadataQueryWorkflow:
 
     @staticmethod
     def _request_for_record(
-        base: MetadataLookupRequest, record: CatalogueRecord
+        base: MetadataLookupRequest,
+        record: CatalogueRecord,
+        *,
+        exact_only: bool = False,
     ) -> MetadataLookupRequest:
+        pmid = (
+            str(record.get("pmid") or "")
+            or MetadataQueryWorkflow._confirmed_value(record, "pmid")
+            or base.pmid
+        )
+        doi = (
+            str(record.get("doi") or "")
+            or MetadataQueryWorkflow._confirmed_value(record, "doi")
+            or base.doi
+        )
+        arxiv_id = MetadataQueryWorkflow._record_arxiv_id(record) or base.arxiv_id
         return replace(
             base,
-            pmid=(
-                str(record.get("pmid") or "")
-                or MetadataQueryWorkflow._confirmed_value(record, "pmid")
-                or base.pmid
-            ),
-            doi=(
-                str(record.get("doi") or "")
-                or MetadataQueryWorkflow._confirmed_value(record, "doi")
-                or base.doi
-            ),
-            title=str(record.get("title") or "") or base.title,
-            authors=str(record.get("authors") or "") or base.authors,
-            year=str(record.get("year") or "") or base.year,
-            journal=str(record.get("journal") or "") or base.journal,
+            pmid=pmid,
+            doi=None if pmid else doi,
+            arxiv_id=None if pmid or doi else arxiv_id,
+            title=None if exact_only else (str(record.get("title") or "") or base.title),
+            authors=None if exact_only else (str(record.get("authors") or "") or base.authors),
+            year=None if exact_only else (str(record.get("year") or "") or base.year),
+            journal=None if exact_only else (str(record.get("journal") or "") or base.journal),
         )
+
+    @staticmethod
+    def _record_arxiv_id(record: CatalogueRecord) -> str:
+        current_id = str(record.get("id") or "")
+        if current_id.upper().startswith("ARXIV:"):
+            return current_id.split(":", 1)[1].strip()
+        return ""
+
+    @staticmethod
+    def _record_is_incomplete(record: CatalogueRecord) -> bool:
+        identifier_available = bool(
+            normalize_pmid(record.get("pmid"))
+            or normalize_doi(record.get("doi"))
+            or MetadataQueryWorkflow._record_arxiv_id(record)
+        )
+        if not identifier_available:
+            return False
+        source = str(record.get("source") or "")
+        mixed_source = len([item for item in re.split(r"\s*;\s*", source) if item]) > 1
+        local_primary = normalized_text(source) == "local pdf"
+        local_id = str(record.get("id") or "").upper().startswith("LOCAL:")
+        missing_core = any(
+            field in record.values and not record.get(field)
+            for field in ("authors", "year", "journal", "abstract")
+        )
+        journal_incomplete = bool(record.get("journal")) != bool(record.get("journal_abbrev"))
+        return local_id or local_primary or mixed_source or missing_core or journal_incomplete
 
     @staticmethod
     def _duplicates(
@@ -605,48 +782,36 @@ class MetadataQueryWorkflow:
         record: CatalogueRecord,
         metadata: MetadataRecord,
     ) -> tuple[list[str], list[dict[str, Any]]]:
-        proposed = metadata.catalogue_fields()
-        updates: dict[str, Any] = {}
+        issue_keys = self.canonicalizer.conflicts(record, metadata)
         conflicts: list[dict[str, Any]] = []
-        for field, value in proposed.items():
-            if field not in catalogue.headers or value in (None, ""):
-                continue
-            current = record.get(field)
-            if current in (None, ""):
-                updates[field] = value
-            elif field in MACHINE_FILLABLE_FIELDS and not self._equivalent(field, current, value):
-                issue = f"Existing value {current!r} conflicts with provider value {value!r}."
-                outcome = catalogue.ensure_review_blocker(
-                    record,
-                    field,
-                    issue,
-                    issue_key="catalogue_existing_value_conflict",
-                    conflict_with_confirmation=True,
+        for issue_key in issue_keys:
+            field = issue_key.removeprefix("metadata_").removesuffix("_conflict")
+            recorded_issue_key = (
+                issue_key
+                if issue_key == "metadata_journal_conflict"
+                else "catalogue_existing_value_conflict"
+            )
+            issue = f"Existing {field} conflicts with the accepted provider record."
+            outcome = catalogue.ensure_review_blocker(
+                record,
+                field,
+                issue,
+                issue_key=recorded_issue_key,
+                conflict_with_confirmation=True,
+            )
+            if outcome in {"added", "existing"}:
+                conflicts.append(
+                    {
+                        "row": record.row_number,
+                        "record_uid": record.get("record_uid") or None,
+                        "field": field,
+                        "issue": recorded_issue_key,
+                    }
                 )
-                if outcome in {"added", "existing"}:
-                    conflicts.append(
-                        {
-                            "row": record.row_number,
-                            "field": field,
-                            "issue": "catalogue_existing_value_conflict",
-                            "existing": current,
-                            "provider": value,
-                        }
-                    )
-        if updates and "date_updated" in catalogue.headers:
-            updates["date_updated"] = date.today().isoformat()
-        changes = catalogue.update_fields(record, updates) if updates else []
-        return [change.field_name for change in changes], conflicts
-
-    @staticmethod
-    def _equivalent(field: str, left: Any, right: Any) -> bool:
-        if field == "doi":
-            return normalize_doi(left) == normalize_doi(right)
-        if field == "pmid":
-            return normalize_pmid(left) == normalize_pmid(right)
-        if field == "title":
-            return normalize_title(left) == normalize_title(right)
-        return normalized_text(left) == normalized_text(right)
+        if conflicts:
+            return [], conflicts
+        canonical = self.canonicalizer.canonicalize(catalogue, record, metadata)
+        return canonical.changed_fields, []
 
     @staticmethod
     def _eligible_new_record(metadata: MetadataRecord, confidence: str) -> bool:
@@ -662,8 +827,9 @@ class MetadataQueryWorkflow:
     ) -> dict[str, Any]:
         today = date.today().isoformat()
         values = {
-            "id": metadata.canonical_id,
+            "id": RegisteredRecordCanonicalizer.canonical_id(metadata),
             **metadata.catalogue_fields(),
+            "source": RegisteredRecordCanonicalizer.canonical_source(metadata),
             "pdf_status": PdfStatus.NOT_DOWNLOADED.value,
             "date_added": today,
             "date_updated": today,
@@ -748,9 +914,4 @@ class MetadataQueryWorkflow:
 
     @staticmethod
     def _confirmed_value(record: CatalogueRecord, field_name: str) -> str:
-        match = re.search(
-            rf"^USER_CONFIRMED:\s*field={re.escape(field_name)};\s*value=([^;\r\n]*)",
-            str(record.get("uncertainty") or ""),
-            re.I | re.M,
-        )
-        return match.group(1).strip() if match else ""
+        return confirmed_value(record.get("uncertainty"), field_name)

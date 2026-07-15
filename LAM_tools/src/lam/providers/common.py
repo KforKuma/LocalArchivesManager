@@ -80,6 +80,7 @@ def provenance(
         "pmid",
         "arxiv_id",
         "publication_type",
+        "raw_publication_types",
         "abstract",
         "keywords",
         "mesh_terms",

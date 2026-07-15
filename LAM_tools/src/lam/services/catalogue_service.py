@@ -5,6 +5,8 @@ import hashlib
 import os
 import re
 import shutil
+import uuid
+from copy import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -18,10 +20,17 @@ from ..schema import (
     MACHINE_MAINTAINED_FIELDS,
     PHASE1_REQUIRED_FIELDS,
     SNAPSHOT_FIELDS,
+    SYSTEM_IDENTITY_FIELDS,
     USER_CONTROLLED_FIELDS,
 )
 from ..utils.identifiers import normalize_doi, normalize_pmid
 from ..utils.normalize import normalized_text
+from ..utils.publication_type import canonicalize_publication_type
+from ..utils.uncertainty import (
+    confirmed_value,
+    has_user_confirmation,
+    parse_user_confirmations,
+)
 
 
 UNCERTAINTY_PREFIXES = ("NEEDS_REVIEW:", "USER_CONFIRMED:", "MACHINE_NOTE:", "RESOLVED:")
@@ -99,7 +108,7 @@ class CatalogueService:
 
     def _validate_duplicate_values(self) -> None:
         problems: list[str] = []
-        for field_name in ("id", "doi", "pmid", "pdf_relative_path"):
+        for field_name in ("record_uid", "id", "doi", "pmid", "pdf_relative_path"):
             if field_name not in self.headers:
                 continue
             seen: dict[str, int] = {}
@@ -146,6 +155,8 @@ class CatalogueService:
                 raise CatalogueError(f"Workflow cannot update field: {field_name}")
             if field_name not in self.headers:
                 raise CatalogueError(f"Catalogue field is missing: {field_name}")
+            if field_name == "publication_type":
+                new_value = canonicalize_publication_type(new_value).canonical_type
             old_value = record.get(field_name, None)
             if (
                 field_name in MACHINE_FILLABLE_FIELDS
@@ -165,15 +176,139 @@ class CatalogueService:
             applied.append(change)
         return applied
 
+    def ensure_header(self, field_name: str) -> int:
+        """Add one optional machine column in memory while preserving all sheets."""
+        if self.worksheet is None:
+            raise CatalogueError("Catalogue must be loaded before its schema can be extended")
+        if field_name in self.headers:
+            return self.headers[field_name]
+        column = self.worksheet.max_column + 1
+        target = self.worksheet.cell(row=1, column=column)
+        target.value = field_name
+        if column > 1:
+            source = self.worksheet.cell(row=1, column=column - 1)
+            target.font = copy(source.font)
+            target.fill = copy(source.fill)
+            target.border = copy(source.border)
+            target.alignment = copy(source.alignment)
+            target.number_format = source.number_format
+            target.protection = copy(source.protection)
+        self.headers[field_name] = column
+        for record in self.records:
+            record.values.setdefault(field_name, None)
+        return column
+
+    def ensure_record_uid(self, record: CatalogueRecord) -> str:
+        """Return the immutable row UUID, creating it only when absent."""
+        current = str(record.get("record_uid") or "").strip()
+        if current:
+            try:
+                return str(uuid.UUID(current))
+            except ValueError as exc:
+                raise CatalogueError(
+                    f"Invalid record_uid at row {record.row_number}: {current!r}"
+                ) from exc
+        column = self.ensure_header("record_uid")
+        value = str(uuid.uuid4())
+        self.worksheet.cell(row=record.row_number, column=column).value = value
+        record.values["record_uid"] = value
+        self.changes.append(
+            CatalogueChange(record.row_number, "record_uid", None, value)
+        )
+        return value
+
+    def update_canonical_fields(
+        self, record: CatalogueRecord, updates: dict[str, Any]
+    ) -> list[CatalogueChange]:
+        """Apply a prevalidated canonical record without overwriting user decisions."""
+        if self.worksheet is None:
+            raise CatalogueError("Catalogue must be loaded before it can be updated")
+        confirmed_fields = {
+            item.field.strip().casefold()
+            for item in parse_user_confirmations(record.get("uncertainty"))
+        }
+        applied: list[CatalogueChange] = []
+        for field_name, new_value in updates.items():
+            if field_name in USER_CONTROLLED_FIELDS:
+                raise CatalogueError(f"Refusing to overwrite user-controlled field: {field_name}")
+            if field_name not in (
+                SYSTEM_IDENTITY_FIELDS | MACHINE_MAINTAINED_FIELDS | MACHINE_FILLABLE_FIELDS
+            ):
+                raise CatalogueError(f"Workflow cannot canonicalize field: {field_name}")
+            if field_name == "record_uid":
+                current_uid = str(record.get("record_uid") or "").strip()
+                if current_uid and normalized_text(current_uid) != normalized_text(new_value):
+                    raise CatalogueError("Refusing to change immutable record_uid")
+                self.ensure_header("record_uid")
+            elif field_name not in self.headers:
+                raise CatalogueError(f"Catalogue field is missing: {field_name}")
+            if field_name.casefold() in confirmed_fields and field_name not in {"id", "record_uid"}:
+                continue
+            if field_name == "publication_type":
+                new_value = canonicalize_publication_type(new_value).canonical_type
+            old_value = record.get(field_name, None)
+            if self._equivalent(old_value, new_value):
+                continue
+            column = self.headers[field_name]
+            self.worksheet.cell(row=record.row_number, column=column).value = new_value
+            record.values[field_name] = new_value
+            change = CatalogueChange(record.row_number, field_name, old_value, new_value)
+            self.changes.append(change)
+            applied.append(change)
+        return applied
+
+    def update_provisional_fields(
+        self, record: CatalogueRecord, updates: dict[str, Any]
+    ) -> list[CatalogueChange]:
+        """Upgrade machine-owned values on one LOCAL row after confirmed metadata."""
+        if not str(record.get("id") or "").upper().startswith("LOCAL:"):
+            return self.update_fields(record, updates)
+        if self.worksheet is None:
+            raise CatalogueError("Catalogue must be loaded before it can be updated")
+        current_uncertainty = str(record.get("uncertainty") or "")
+        confirmed_fields = {
+            item.field.strip().casefold()
+            for item in parse_user_confirmations(current_uncertainty)
+        }
+        applied: list[CatalogueChange] = []
+        for field_name, new_value in updates.items():
+            if field_name in USER_CONTROLLED_FIELDS:
+                raise CatalogueError(f"Refusing to overwrite user-controlled field: {field_name}")
+            if field_name not in MACHINE_MAINTAINED_FIELDS | MACHINE_FILLABLE_FIELDS:
+                raise CatalogueError(f"Workflow cannot update field: {field_name}")
+            if field_name not in self.headers:
+                raise CatalogueError(f"Catalogue field is missing: {field_name}")
+            if field_name == "publication_type":
+                new_value = canonicalize_publication_type(new_value).canonical_type
+            if field_name.casefold() in confirmed_fields:
+                continue
+            old_value = record.get(field_name, None)
+            if self._equivalent(old_value, new_value):
+                continue
+            column = self.headers[field_name]
+            self.worksheet.cell(row=record.row_number, column=column).value = new_value
+            record.values[field_name] = new_value
+            change = CatalogueChange(record.row_number, field_name, old_value, new_value)
+            self.changes.append(change)
+            applied.append(change)
+        return applied
+
     def add_record(self, values: dict[str, Any]) -> CatalogueRecord:
         """Append one machine-created row without changing existing row order."""
         if self.worksheet is None:
             raise CatalogueError("Catalogue must be loaded before a row can be added")
+        self.ensure_header("record_uid")
+        normalized_values = dict(values)
+        normalized_values.setdefault("record_uid", str(uuid.uuid4()))
+        if "publication_type" in normalized_values:
+            normalized_values["publication_type"] = canonicalize_publication_type(
+                normalized_values["publication_type"]
+            ).canonical_type
         supplied = {
-            key: value for key, value in values.items() if key in self.headers and value not in (None, "")
+            key: value for key, value in normalized_values.items() if key in self.headers and value not in (None, "")
         }
         unsupported = set(supplied) - (
-            {"id"} | MACHINE_FILLABLE_FIELDS | MACHINE_MAINTAINED_FIELDS
+            SYSTEM_IDENTITY_FIELDS | MACHINE_FILLABLE_FIELDS | MACHINE_MAINTAINED_FIELDS
         )
         if unsupported:
             raise CatalogueError(
@@ -181,7 +316,7 @@ class CatalogueService:
             )
         if any(supplied.get(field) for field in USER_CONTROLLED_FIELDS):
             raise CatalogueError("Machine-created rows cannot set user-controlled fields")
-        for field_name in ("id", "doi", "pmid"):
+        for field_name in ("record_uid", "id", "doi", "pmid"):
             value = supplied.get(field_name)
             if value and self.find_by(field_name, value):
                 raise CatalogueError(
@@ -198,6 +333,25 @@ class CatalogueService:
         self.records.append(record)
         self.changes.append(CatalogueChange(row_number, "__row__", None, supplied))
         return record
+
+    def repair_publication_type(
+        self, record: CatalogueRecord, raw_value: Any
+    ) -> list[CatalogueChange]:
+        """Normalize the machine-fillable type during the explicit repair workflow."""
+        if self.worksheet is None:
+            raise CatalogueError("Catalogue must be loaded before it can be updated")
+        if "publication_type" not in self.headers:
+            raise CatalogueError("Catalogue field is missing: publication_type")
+        new_value = canonicalize_publication_type(raw_value).canonical_type
+        old_value = record.get("publication_type", None)
+        if self._equivalent(old_value, new_value):
+            return []
+        column = self.headers["publication_type"]
+        self.worksheet.cell(row=record.row_number, column=column).value = new_value
+        record.values["publication_type"] = new_value
+        change = CatalogueChange(record.row_number, "publication_type", old_value, new_value)
+        self.changes.append(change)
+        return [change]
 
     @staticmethod
     def _equivalent(left: Any, right: Any) -> bool:
@@ -228,7 +382,8 @@ class CatalogueService:
             return outcome == "added"
         current = str(record.get("uncertainty") or "")
         lines = [line.rstrip() for line in current.splitlines() if line.strip()]
-        line = f"{prefix} field={field_name}; issue={issue}"
+        issue_part = f"; issue_key={issue_key}" if issue_key else ""
+        line = f"{prefix} field={field_name}{issue_part}; issue={issue}"
         normalized_line = normalized_text(line)
         if any(normalized_text(existing) == normalized_line for existing in lines):
             return False
@@ -272,13 +427,18 @@ class CatalogueService:
     def configure_review_state(self, previous_snapshot: dict[str, Any]) -> None:
         """Carry approvals and treat a user-cleared blocker as a one-time decision."""
         self.review_decisions.update(previous_snapshot.get("review_decisions", []))
-        old_rows = {
-            row.get("row_number"): row.get("fields", {})
+        old_rows = {row.get("row_number"): row for row in previous_snapshot.get("rows", [])}
+        old_by_uid = {
+            normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid")): row
             for row in previous_snapshot.get("rows", [])
+            if normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid"))
         }
         for record in self.records:
+            old_row = old_by_uid.get(normalized_text(record.get("record_uid"))) or old_rows.get(
+                record.row_number, {}
+            )
             old_uncertainty = str(
-                old_rows.get(record.row_number, {}).get("uncertainty") or ""
+                old_row.get("fields", {}).get("uncertainty") or ""
             )
             current_lines = {
                 line.strip()
@@ -298,6 +458,72 @@ class CatalogueService:
                         record, field_name, issue_key, issue
                     )
                 )
+
+    def has_user_confirmation(self, record: CatalogueRecord, field_name: str) -> bool:
+        return has_user_confirmation(record.get("uncertainty"), field_name)
+
+    def confirmed_value(self, record: CatalogueRecord, field_name: str) -> str:
+        return confirmed_value(record.get("uncertainty"), field_name)
+
+    def resolve_confirmed_reviews(self, record: CatalogueRecord) -> list[str]:
+        """Remove only machine blockers covered by a user confirmation."""
+        current = str(record.get("uncertainty") or "")
+        lines = [line.rstrip() for line in current.splitlines() if line.strip()]
+        removed: list[str] = []
+        retained: list[str] = []
+        for line in lines:
+            parsed = self._parse_review_line(line)
+            if parsed and self.has_user_confirmation(record, parsed[0]):
+                removed.append(parsed[1])
+                continue
+            retained.append(line)
+        if retained != lines:
+            self.update_fields(record, {"uncertainty": "\n".join(retained)})
+        return removed
+
+    def resolve_review_blockers(
+        self,
+        record: CatalogueRecord,
+        field_name: str,
+        issue_keys: set[str],
+        *,
+        resolution: str,
+    ) -> list[str]:
+        """Resolve only named machine blockers while preserving all user text."""
+        current = str(record.get("uncertainty") or "")
+        lines = [line.rstrip() for line in current.splitlines() if line.strip()]
+        removed: list[str] = []
+        retained: list[str] = []
+        for line in lines:
+            parsed = self._parse_review_line(line)
+            if parsed and normalized_text(parsed[0]) == normalized_text(field_name) and parsed[1] in issue_keys:
+                removed.append(parsed[1])
+                continue
+            retained.append(line)
+        if not removed:
+            return []
+        resolved_line = (
+            f"RESOLVED: field={field_name}; issue_key={','.join(sorted(set(removed)))}; "
+            f"issue={resolution}"
+        )
+        if not any(normalized_text(line) == normalized_text(resolved_line) for line in retained):
+            retained.append(resolved_line)
+        self.update_fields(record, {"uncertainty": "\n".join(retained)})
+        return removed
+
+    def active_review_lines(self, record: CatalogueRecord) -> list[str]:
+        active: list[str] = []
+        for line in str(record.get("uncertainty") or "").splitlines():
+            parsed = self._parse_review_line(line.strip())
+            if not parsed:
+                continue
+            field_name, issue_key, issue = parsed
+            if self.has_user_confirmation(record, field_name):
+                continue
+            if self._review_decision_key(record, field_name, issue_key, issue) in self.review_decisions:
+                continue
+            active.append(line.rstrip())
+        return active
 
     @staticmethod
     def _parse_review_line(line: str) -> tuple[str, str, str] | None:
@@ -326,17 +552,24 @@ class CatalogueService:
         issue_key: str,
         issue: str,
     ) -> str:
-        identity = record.get("id") or f"row:{record.row_number}"
+        identity = (
+            record.get("record_uid")
+            or record.get("id")
+            or f"row:{record.row_number}"
+        )
+        evidence = "|".join(
+            normalized_text(record.get(field))
+            for field in ("pmid", "doi", "title", "authors", "year", "journal")
+        )
         payload = "|".join(
             normalized_text(value)
-            for value in (identity, field_name, issue_key, issue)
+            for value in (identity, field_name, issue_key, issue, evidence)
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _has_user_confirmation(lines: Iterable[str], field_name: str) -> bool:
-        pattern = re.compile(rf"^USER_CONFIRMED:\s*field={re.escape(field_name)}(?:;|$)", re.I)
-        return any(pattern.search(line.strip()) for line in lines)
+        return has_user_confirmation("\n".join(lines), field_name)
 
     def snapshot_payload(self) -> dict[str, Any]:
         rows = []
@@ -344,6 +577,7 @@ class CatalogueService:
             rows.append(
                 {
                     "row_number": record.row_number,
+                    "record_uid": record.get("record_uid", None),
                     "fields": {field: record.get(field, None) for field in SNAPSHOT_FIELDS},
                 }
             )

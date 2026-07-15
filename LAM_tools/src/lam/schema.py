@@ -1,5 +1,6 @@
 RECOMMENDED_FIELDS = (
     "id",
+    "record_uid",
     "title",
     "authors",
     "year",
@@ -61,8 +62,11 @@ MACHINE_MAINTAINED_FIELDS = {
     "uncertainty",
 }
 
+SYSTEM_IDENTITY_FIELDS = {"id", "record_uid"}
+
 SNAPSHOT_FIELDS = (
     "id",
+    "record_uid",
     "title",
     "topic_folder",
     "pdf_status",
@@ -78,6 +82,8 @@ RESERVED_DIRECTORIES = {
     ".idea",
     ".library_state",
     "__pycache__",
+    "build",
+    "dist",
     "inbox",
     "lam_tools",
     "registered",

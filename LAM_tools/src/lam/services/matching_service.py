@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from difflib import SequenceMatcher
 from pathlib import Path
 import re
 from typing import Iterable
@@ -9,6 +8,7 @@ from ..models import CatalogueRecord, MatchResult, MatchStatus, PdfInspection
 from ..utils.identifiers import normalize_doi, normalize_pmid
 from ..utils.normalize import normalized_relative_path, normalized_text
 from ..utils.text import normalize_title
+from ..utils.title_matching import tolerant_title_score, titles_tolerantly_equivalent
 
 
 class MatchingService:
@@ -42,6 +42,7 @@ class MatchingService:
         doi_matches: set[int] = set()
         pmid_matches: set[int] = set()
         title_matches: set[int] = set()
+        tolerant_title_matches: set[int] = set()
         years: set[str] = set()
         if inspection:
             doi_values = {
@@ -73,6 +74,15 @@ class MatchingService:
                 for row in rows
                 if normalize_title(row.get("title")) in title_values
                 and normalize_title(row.get("title"))
+            }
+            tolerant_title_matches = {
+                row.row_number
+                for row in rows
+                if row.get("title")
+                and any(
+                    titles_tolerantly_equivalent(row.get("title"), item.value)
+                    for item in inspection.title_candidates
+                )
             }
 
         if confirmed_catalogue_id:
@@ -189,6 +199,25 @@ class MatchingService:
                 "normalized_title_matches_multiple_rows",
             )
 
+        if tolerant_title_matches and years:
+            supported = {
+                row_number
+                for row_number in tolerant_title_matches
+                if str(self._row(rows, row_number).get("year") or "").strip() in years
+            }
+            if len(supported) == 1:
+                return self._matched(
+                    self._row(rows, next(iter(supported))),
+                    "tolerant_title",
+                    "exact_title_supported",
+                )
+            if supported:
+                return self._blocked(
+                    "paper_identity_ambiguous",
+                    sorted(supported),
+                    "tolerant_title_matches_multiple_rows",
+                )
+
         fuzzy = self._fuzzy_title_candidates(rows, inspection)
         if fuzzy:
             return self._blocked(
@@ -265,15 +294,14 @@ class MatchingService:
     ) -> list[int]:
         if not inspection:
             return []
-        titles = [normalize_title(item.value) for item in inspection.title_candidates]
-        titles = [title for title in titles if title]
+        titles = [item.value for item in inspection.title_candidates if item.value]
         scored: list[tuple[float, int]] = []
         for row in rows:
-            catalogue_title = normalize_title(row.get("title"))
+            catalogue_title = str(row.get("title") or "")
             if not catalogue_title:
                 continue
             score = max(
-                (SequenceMatcher(None, title, catalogue_title).ratio() for title in titles),
+                (tolerant_title_score(title, catalogue_title) for title in titles),
                 default=0.0,
             )
             if score >= 0.9:

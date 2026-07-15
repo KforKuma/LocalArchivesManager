@@ -41,9 +41,21 @@ class OperationJournal:
         journal.write()
         return journal
 
-    def set_operation_state(self, catalogue_row: int, state: str, **details: Any) -> None:
+    def set_operation_state(
+        self,
+        catalogue_row: int | None,
+        state: str,
+        *,
+        record_uid: str | None = None,
+        **details: Any,
+    ) -> None:
         for operation in self.payload["operations"]:
-            if operation.get("catalogue_row") == catalogue_row:
+            uid_matches = bool(
+                record_uid
+                and operation.get("record_uid")
+                and operation.get("record_uid") == record_uid
+            )
+            if uid_matches or operation.get("catalogue_row") == catalogue_row:
                 operation["execution_state"] = state
                 stages = operation.setdefault("stages", [])
                 if not stages or stages[-1] != state:
@@ -98,3 +110,57 @@ def incomplete_journals(state_dir: Path) -> list[dict[str, Any]]:
                 }
             )
     return results
+
+
+def completed_file_movements(
+    state_dir: Path,
+    library_root: Path,
+) -> list[dict[str, Any]]:
+    """Return committed journal moves without trusting paths outside the library."""
+    results: list[dict[str, Any]] = []
+    runs_dir = state_dir / "runs"
+    if not runs_dir.is_dir():
+        return results
+    root = library_root.resolve()
+    accepted_states = {"file_moved", "catalogue_committed", "final_check_committed"}
+    for path in sorted(runs_dir.glob("*/operation_journal.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if payload.get("status") not in accepted_states:
+            continue
+        for operation in payload.get("operations", []):
+            if operation.get("operation_type") not in {"move", "rename"}:
+                continue
+            stages = set(operation.get("stages", []))
+            state = operation.get("execution_state")
+            if "file_moved" not in stages and state not in accepted_states:
+                continue
+            source = _journal_relative_path(operation.get("source"), root)
+            target = _journal_relative_path(operation.get("target"), root)
+            if not source or not target:
+                continue
+            results.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "run_id": payload.get("run_id"),
+                    "workflow": payload.get("workflow"),
+                    "status": payload.get("status"),
+                }
+            )
+    return results
+
+
+def _journal_relative_path(value: Any, root: Path) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    try:
+        resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+        relative = resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    return relative.as_posix()
