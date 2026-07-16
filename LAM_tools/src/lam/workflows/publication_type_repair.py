@@ -50,9 +50,15 @@ class PublicationTypeRepairWorkflow:
         today = date.today().isoformat()
 
         for record in records:
+            main_documents = [
+                document
+                for document in catalogue.documents_for_paper(record.get("paper_uuid"))
+                if str(document.get("document_type") or "").casefold() == "main"
+            ]
+            document = main_documents[0] if len(main_documents) == 1 else None
             old_type = record.get("publication_type", None)
             type_result = canonicalize_publication_type(old_type)
-            row_report = self._row_report(record, old_type, type_result)
+            row_report = self._row_report(record, document, old_type, type_result)
             repair_rows.append(row_report)
 
             catalogue.repair_publication_type(record, old_type)
@@ -62,8 +68,8 @@ class PublicationTypeRepairWorkflow:
             if not type_warning:
                 self._clear_resolved_type_review(catalogue, record)
 
-            relative = str(record.get("pdf_relative_path") or "").strip()
-            status = str(record.get("pdf_status") or "").strip().casefold()
+            relative = str(document.get("relative_path") or "").strip() if document else ""
+            status = str(document.get("file_status") or "").strip().casefold() if document else ""
             filename_result = self._filename_result(record, type_result)
             row_report.update(
                 {
@@ -135,6 +141,7 @@ class PublicationTypeRepairWorkflow:
                 planned.append(
                     {
                         "record": record,
+                        "document": document,
                         "operation": operation,
                         "filename_result": filename_result,
                         "row_report": row_report,
@@ -207,11 +214,11 @@ class PublicationTypeRepairWorkflow:
                 if journal:
                     journal.set_operation_state(record.row_number, "file_moved")
                 relative = operation.target.relative_to(self.settings.library_root).as_posix()
-                catalogue.update_fields(
-                    record,
+                catalogue.update_document_fields(
+                    item["document"],
                     {
-                        "pdf_filename": operation.target.name,
-                        "pdf_relative_path": relative,
+                        "filename": operation.target.name,
+                        "relative_path": relative,
                         "date_updated": today,
                     },
                 )
@@ -299,13 +306,14 @@ class PublicationTypeRepairWorkflow:
     def _row_report(
         self,
         record: CatalogueRecord,
+        document: Any,
         old_type: Any,
         type_result: CanonicalTypeResult,
     ) -> dict[str, Any]:
-        old_filename = str(record.get("pdf_filename") or "")
+        old_filename = str(document.get("filename") or "") if document else ""
         return {
             "row": record.row_number,
-            "id": record.get("id"),
+            "paper_uuid": record.get("paper_uuid"),
             "old_publication_type": old_type,
             "new_publication_type": type_result.canonical_type,
             "raw_publication_types": list(type_result.raw_types),
@@ -401,8 +409,8 @@ class PublicationTypeRepairWorkflow:
                 },
                 "planned_updates": {
                     "publication_type": item["filename_result"].publication_type,
-                    "pdf_filename": item["operation"].target.name,
-                    "pdf_relative_path": item["operation"].target.relative_to(
+                    "filename": item["operation"].target.name,
+                    "relative_path": item["operation"].target.relative_to(
                         self.settings.library_root
                     ).as_posix(),
                 },

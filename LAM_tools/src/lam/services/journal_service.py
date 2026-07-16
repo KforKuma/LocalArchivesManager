@@ -51,15 +51,15 @@ class OperationJournal:
         catalogue_row: int | None,
         state: str,
         *,
-        record_uid: str | None = None,
+        paper_uuid: str | None = None,
         operation_id: str | None = None,
         document_id: str | None = None,
         **details: Any,
     ) -> None:
-        """Advance selected operations while retaining the legacy row/UID API.
+        """Advance selected operations by stable paper/document identity.
 
         ``operation_id`` has highest precedence, followed by ``document_id``.
-        When either precise selector is supplied, row and record UID fallback is
+        When either precise selector is supplied, row and paper UUID fallback is
         intentionally disabled so that sibling documents for the same paper are
         not advanced accidentally.
         """
@@ -82,9 +82,9 @@ class OperationJournal:
             selected_operations = []
             for operation in operations:
                 uid_matches = bool(
-                    record_uid
-                    and operation.get("record_uid")
-                    and operation.get("record_uid") == record_uid
+                    paper_uuid
+                    and operation.get("paper_uuid")
+                    and operation.get("paper_uuid") == paper_uuid
                 )
                 if uid_matches or operation.get("catalogue_row") == catalogue_row:
                     selected_operations.append(operation)

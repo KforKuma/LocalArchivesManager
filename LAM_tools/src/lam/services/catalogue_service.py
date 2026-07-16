@@ -16,18 +16,18 @@ from openpyxl import load_workbook
 from ..exceptions import CatalogueError
 from ..models import CatalogueChange, CatalogueRecord, DocumentRecord
 from ..schema import (
-    CATALOGUE_051_FIELDS,
+    CATALOGUE_FIELDS,
     DOCUMENT_FIELDS,
     DOCUMENT_TYPES,
     MACHINE_FILLABLE_FIELDS,
     MACHINE_MAINTAINED_FIELDS,
-    PHASE1_REQUIRED_FIELDS,
+    LEGACY_CATALOGUE_REQUIRED_FIELDS,
     SNAPSHOT_FIELDS,
     SYSTEM_IDENTITY_FIELDS,
     SUPPLEMENTARY_TYPES,
     USER_CONTROLLED_FIELDS,
 )
-from ..utils.identifiers import normalize_doi, normalize_pmid
+from ..utils.identifiers import normalize_arxiv_id, normalize_doi, normalize_pmid
 from ..utils.normalize import normalized_text
 from ..utils.publication_type import canonicalize_publication_type
 from ..utils.uncertainty import (
@@ -45,8 +45,9 @@ UNCERTAINTY_PREFIXES = ("NEEDS_REVIEW:", "USER_CONFIRMED:", "MACHINE_NOTE:", "RE
 
 
 class CatalogueService:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, allow_legacy_schema: bool = False):
         self.path = path
+        self.allow_legacy_schema = allow_legacy_schema
         self.workbook = None
         self.worksheet = None
         self.headers: dict[str, int] = {}
@@ -70,9 +71,10 @@ class CatalogueService:
         candidates: list[tuple[Any, dict[str, int]]] = []
         for sheet in self.workbook.worksheets:
             headers = self._read_headers(sheet)
-            if set(CATALOGUE_051_FIELDS).issubset(
-                headers
-            ) or PHASE1_REQUIRED_FIELDS.issubset(headers):
+            if set(CATALOGUE_FIELDS).issubset(headers) or (
+                self.allow_legacy_schema
+                and LEGACY_CATALOGUE_REQUIRED_FIELDS.issubset(headers)
+            ):
                 candidates.append((sheet, headers))
         if not candidates:
             available = {
@@ -80,9 +82,9 @@ class CatalogueService:
                 for sheet in self.workbook.worksheets
             }
             raise CatalogueError(
-                "No worksheet contains a valid legacy or 0.5.1 Catalogue schema. "
-                f"Legacy required={sorted(PHASE1_REQUIRED_FIELDS)}; "
-                f"0.5.1 required={sorted(CATALOGUE_051_FIELDS)}; available={available}"
+                "No worksheet contains a valid 0.5.2 Catalogue schema. "
+                f"required={list(CATALOGUE_FIELDS)}; available={available}. "
+                "Use 'lam migrate-identifiers --dry-run' for a legacy workbook."
             )
         self.worksheet, self.headers = candidates[0]
         self._validate_duplicate_headers()
@@ -96,6 +98,11 @@ class CatalogueService:
                 self.records.append(CatalogueRecord(row_number=row_number, values=values))
         self._validate_duplicate_values()
         self._load_documents()
+        if not self.allow_legacy_schema and not self.has_documents_sheet:
+            raise CatalogueError(
+                "The 0.5.2 Catalogue requires a Documents sheet. "
+                "Run 'lam migrate-identifiers --dry-run' first."
+            )
         return self.records
 
     @property
@@ -112,7 +119,7 @@ class CatalogueService:
         sheet = self.workbook["Documents"]
         headers = self._read_headers(sheet)
         missing = set(DOCUMENT_FIELDS) - set(headers)
-        if missing:
+        if missing and not self.allow_legacy_schema:
             raise CatalogueError(
                 f"Documents sheet is missing required fields: {sorted(missing)}"
             )
@@ -126,7 +133,8 @@ class CatalogueService:
             }
             if any(value not in (None, "") for value in values.values()):
                 self.documents.append(DocumentRecord(row_number, values))
-        self._validate_documents()
+        if not self.allow_legacy_schema:
+            self._validate_documents()
 
     @staticmethod
     def _validate_sheet_duplicate_headers(sheet: Any, name: str) -> None:
@@ -253,14 +261,7 @@ class CatalogueService:
 
     def _validate_duplicate_values(self) -> None:
         problems: list[str] = []
-        for field_name in (
-            "paper_uuid",
-            "record_uid",
-            "id",
-            "doi",
-            "pmid",
-            "pdf_relative_path",
-        ):
+        for field_name in ("paper_uuid", "doi", "pmid", "arxiv_id"):
             if field_name not in self.headers:
                 continue
             seen: dict[str, int] = {}
@@ -294,6 +295,8 @@ class CatalogueService:
             return normalize_doi(value)
         if field_name == "pmid":
             return normalize_pmid(value)
+        if field_name == "arxiv_id":
+            return normalize_arxiv_id(value)
         return normalized_text(value)
 
     def update_fields(self, record: CatalogueRecord, updates: dict[str, Any]) -> list[CatalogueChange]:
@@ -377,7 +380,7 @@ class CatalogueService:
         return column
 
     def ensure_documents_sheet(self) -> Any:
-        """Create the 0.5.1 Documents sheet without disturbing other sheets."""
+        """Create the Documents sheet without disturbing other sheets."""
         if self.workbook is None or self.worksheet is None:
             raise CatalogueError("Catalogue must be loaded before Documents can be created")
         if self.documents_worksheet is not None:
@@ -416,16 +419,7 @@ class CatalogueService:
                 )
             return str(parsed)
         column = self.ensure_header("paper_uuid")
-        legacy = str(record.get("record_uid") or "").strip()
-        try:
-            parsed_legacy = uuid.UUID(legacy) if legacy else None
-            value = (
-                str(parsed_legacy)
-                if parsed_legacy is not None and parsed_legacy.version == 4
-                else str(uuid.uuid4())
-            )
-        except ValueError:
-            value = str(uuid.uuid4())
+        value = str(uuid.uuid4())
         self.worksheet.cell(row=record.row_number, column=column).value = value
         record.values["paper_uuid"] = value
         self.changes.append(CatalogueChange(record.row_number, "paper_uuid", None, value))
@@ -541,25 +535,6 @@ class CatalogueService:
             applied.append(change)
         return applied
 
-    def ensure_record_uid(self, record: CatalogueRecord) -> str:
-        """Return the immutable row UUID, creating it only when absent."""
-        current = str(record.get("record_uid") or "").strip()
-        if current:
-            try:
-                return str(uuid.UUID(current))
-            except ValueError as exc:
-                raise CatalogueError(
-                    f"Invalid record_uid at row {record.row_number}: {current!r}"
-                ) from exc
-        column = self.ensure_header("record_uid")
-        value = str(uuid.uuid4())
-        self.worksheet.cell(row=record.row_number, column=column).value = value
-        record.values["record_uid"] = value
-        self.changes.append(
-            CatalogueChange(record.row_number, "record_uid", None, value)
-        )
-        return value
-
     def update_canonical_fields(
         self, record: CatalogueRecord, updates: dict[str, Any]
     ) -> list[CatalogueChange]:
@@ -578,14 +553,13 @@ class CatalogueService:
                 SYSTEM_IDENTITY_FIELDS | MACHINE_MAINTAINED_FIELDS | MACHINE_FILLABLE_FIELDS
             ):
                 raise CatalogueError(f"Workflow cannot canonicalize field: {field_name}")
-            if field_name == "record_uid":
-                current_uid = str(record.get("record_uid") or "").strip()
+            if field_name == "paper_uuid":
+                current_uid = str(record.get("paper_uuid") or "").strip()
                 if current_uid and normalized_text(current_uid) != normalized_text(new_value):
-                    raise CatalogueError("Refusing to change immutable record_uid")
-                self.ensure_header("record_uid")
-            elif field_name not in self.headers:
+                    raise CatalogueError("Refusing to change immutable paper_uuid")
+            if field_name not in self.headers:
                 raise CatalogueError(f"Catalogue field is missing: {field_name}")
-            if field_name.casefold() in confirmed_fields and field_name not in {"id", "record_uid"}:
+            if field_name.casefold() in confirmed_fields and field_name != "paper_uuid":
                 continue
             if field_name == "publication_type":
                 new_value = canonicalize_publication_type(new_value).canonical_type
@@ -603,9 +577,7 @@ class CatalogueService:
     def update_provisional_fields(
         self, record: CatalogueRecord, updates: dict[str, Any]
     ) -> list[CatalogueChange]:
-        """Upgrade machine-owned values on one LOCAL row after confirmed metadata."""
-        if not str(record.get("id") or "").upper().startswith("LOCAL:"):
-            return self.update_fields(record, updates)
+        """Upgrade machine-owned values on one provisional row after confirmation."""
         if self.worksheet is None:
             raise CatalogueError("Catalogue must be loaded before it can be updated")
         current_uncertainty = str(record.get("uncertainty") or "")
@@ -640,13 +612,8 @@ class CatalogueService:
         """Append one machine-created row without changing existing row order."""
         if self.worksheet is None:
             raise CatalogueError("Catalogue must be loaded before a row can be added")
-        if "paper_uuid" in self.headers:
-            normalized_values = dict(values)
-            normalized_values.setdefault("paper_uuid", str(uuid.uuid4()))
-        else:
-            self.ensure_header("record_uid")
-            normalized_values = dict(values)
-            normalized_values.setdefault("record_uid", str(uuid.uuid4()))
+        normalized_values = dict(values)
+        normalized_values.setdefault("paper_uuid", str(uuid.uuid4()))
         if "publication_type" in normalized_values:
             normalized_values["publication_type"] = canonicalize_publication_type(
                 normalized_values["publication_type"]
@@ -663,7 +630,7 @@ class CatalogueService:
             )
         if any(supplied.get(field) for field in USER_CONTROLLED_FIELDS):
             raise CatalogueError("Machine-created rows cannot set user-controlled fields")
-        for field_name in ("paper_uuid", "record_uid", "id", "doi", "pmid"):
+        for field_name in ("paper_uuid", "doi", "pmid", "arxiv_id"):
             value = supplied.get(field_name)
             if value and self.find_by(field_name, value):
                 raise CatalogueError(
@@ -777,22 +744,16 @@ class CatalogueService:
         old_rows = {row.get("row_number"): row for row in previous_snapshot.get("rows", [])}
         old_by_uid = {
             normalized_text(
-                row.get("paper_uuid")
-                or row.get("fields", {}).get("paper_uuid")
-                or row.get("record_uid")
-                or row.get("fields", {}).get("record_uid")
+                row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid")
             ): row
             for row in previous_snapshot.get("rows", [])
             if normalized_text(
-                row.get("paper_uuid")
-                or row.get("fields", {}).get("paper_uuid")
-                or row.get("record_uid")
-                or row.get("fields", {}).get("record_uid")
+                row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid")
             )
         }
         for record in self.records:
             old_row = old_by_uid.get(
-                normalized_text(record.get("paper_uuid") or record.get("record_uid"))
+                normalized_text(record.get("paper_uuid"))
             ) or old_rows.get(
                 record.row_number, {}
             )
@@ -913,8 +874,6 @@ class CatalogueService:
     ) -> str:
         identity = (
             record.get("paper_uuid")
-            or record.get("record_uid")
-            or record.get("id")
             or f"row:{record.row_number}"
         )
         evidence = "|".join(
@@ -938,7 +897,6 @@ class CatalogueService:
                 {
                     "row_number": record.row_number,
                     "paper_uuid": record.get("paper_uuid", None),
-                    "record_uid": record.get("record_uid", None),
                     "fields": {field: record.get(field, None) for field in SNAPSHOT_FIELDS},
                 }
             )

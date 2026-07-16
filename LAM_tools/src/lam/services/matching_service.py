@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from typing import Iterable
 
-from ..models import CatalogueRecord, MatchResult, MatchStatus, PdfInspection
+from ..models import CatalogueRecord, DocumentRecord, MatchResult, MatchStatus, PdfInspection
 from ..utils.identifiers import normalize_doi, normalize_pmid
 from ..utils.normalize import normalized_relative_path, normalized_text
 from ..utils.text import normalize_title
@@ -19,17 +19,29 @@ class MatchingService:
         relative_path: str,
         filename: str,
         inspection: PdfInspection | None = None,
-        confirmed_catalogue_id: str | None = None,
+        confirmed_paper_uuid: str | None = None,
+        documents: Iterable[DocumentRecord] = (),
     ) -> MatchResult:
         rows = list(records)
-        path_matches = self._matches(
-            rows,
-            "pdf_relative_path",
+        document_rows = list(documents)
+        row_by_uuid = {
+            normalized_text(row.get("paper_uuid")): row.row_number
+            for row in rows
+            if normalized_text(row.get("paper_uuid"))
+        }
+        path_matches = self._document_matches(
+            document_rows,
+            row_by_uuid,
+            "relative_path",
             normalized_relative_path(relative_path),
             normalized_relative_path,
         )
-        filename_matches = self._matches(
-            rows, "pdf_filename", normalized_text(filename), normalized_text
+        filename_matches = self._document_matches(
+            document_rows,
+            row_by_uuid,
+            "filename",
+            normalized_text(filename),
+            normalized_text,
         )
         parsed_filename_title = self._title_from_standard_filename(filename)
         filename_title_matches = {
@@ -85,17 +97,18 @@ class MatchingService:
                 )
             }
 
-        if confirmed_catalogue_id:
+        if confirmed_paper_uuid:
             confirmed = [
                 row
                 for row in rows
-                if normalized_text(row.get("id")) == normalized_text(confirmed_catalogue_id)
+                if normalized_text(row.get("paper_uuid"))
+                == normalized_text(confirmed_paper_uuid)
             ]
             if len(confirmed) != 1:
                 return self._blocked(
                     "paper_identity_ambiguous",
                     [row.row_number for row in confirmed],
-                    "confirmed_catalogue_id_not_unique",
+                    "confirmed_paper_uuid_not_unique",
                 )
             row = confirmed[0]
             identifier_rows = doi_matches | pmid_matches
@@ -143,22 +156,22 @@ class MatchingService:
         if len(path_matches) == 1:
             return self._matched(
                 self._row(rows, next(iter(path_matches))),
-                "pdf_relative_path",
+                "document_relative_path",
                 "exact_title_supported",
             )
         if len(path_matches) > 1:
             return self._blocked(
-                "paper_identity_ambiguous", sorted(path_matches), "duplicate_pdf_relative_path"
+                "paper_identity_ambiguous", sorted(path_matches), "duplicate_document_relative_path"
             )
         if len(filename_matches) == 1:
             return self._matched(
                 self._row(rows, next(iter(filename_matches))),
-                "pdf_filename",
+                "document_filename",
                 "exact_title_supported",
             )
         if len(filename_matches) > 1:
             return self._blocked(
-                "paper_identity_ambiguous", sorted(filename_matches), "duplicate_pdf_filename"
+                "paper_identity_ambiguous", sorted(filename_matches), "duplicate_document_filename"
             )
         if len(filename_title_matches) == 1:
             return self._matched(
@@ -242,6 +255,23 @@ class MatchingService:
         }
 
     @staticmethod
+    def _document_matches(
+        documents: list[DocumentRecord],
+        row_by_uuid: dict[str, int],
+        field_name: str,
+        key: str,
+        normalizer,
+    ) -> set[int]:
+        if not key:
+            return set()
+        return {
+            row_by_uuid[normalized_text(document.get("paper_uuid"))]
+            for document in documents
+            if normalized_text(document.get("paper_uuid")) in row_by_uuid
+            and normalizer(document.get(field_name)) == key
+        }
+
+    @staticmethod
     def _row(rows: list[CatalogueRecord], row_number: int) -> CatalogueRecord:
         return next(row for row in rows if row.row_number == row_number)
 
@@ -258,7 +288,7 @@ class MatchingService:
                 else MatchStatus.HIGH_CONFIDENCE
             ),
             matched_row_id=row.row_number,
-            matched_catalogue_id=str(row.get("id") or ""),
+            matched_paper_uuid=str(row.get("paper_uuid") or ""),
             confidence=confidence,
             method=method,
             candidate_rows=[row.row_number],

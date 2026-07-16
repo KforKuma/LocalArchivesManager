@@ -24,8 +24,9 @@ from ..services.metadata_service import CompositeMetadataLookupService
 from ..services.report_service import ReportService, append_change_log
 from ..services.record_canonicalization_service import RegisteredRecordCanonicalizer
 from ..services.snapshot_service import SnapshotService
-from ..utils.identifiers import normalize_doi, normalize_pmid
+from ..utils.identifiers import normalize_arxiv_id, normalize_doi, normalize_pmid
 from ..utils.filename import standard_pdf_filename_result
+from ..utils.hashing import full_hash
 from ..utils.normalize import normalized_text
 from ..utils.text import normalize_title
 from ..utils.uncertainty import confirmed_value
@@ -50,7 +51,7 @@ class MetadataQueryWorkflow:
         *,
         dry_run: bool = False,
         catalogue_row: int | None = None,
-        catalogue_id: str | None = None,
+        paper_uuid: str | None = None,
         missing_metadata: bool = False,
         incomplete_records: bool = False,
         normalize_existing: bool = False,
@@ -70,21 +71,6 @@ class MetadataQueryWorkflow:
         snapshots = SnapshotService(self.settings.library_root, self.settings.state_dir)
         previous = snapshots.load_catalogue_snapshot() if snapshots.initialized else {}
         catalogue.configure_review_state(previous)
-        record_uids_assigned = 0
-        if normalize_existing:
-            for record in records:
-                if not record.get("record_uid"):
-                    catalogue.ensure_record_uid(record)
-                    record_uids_assigned += 1
-                    result.completed.append(
-                        {
-                            "action": (
-                                "would_assign_record_uid" if dry_run else "assigned_record_uid"
-                            ),
-                            "row": record.row_number,
-                            "record_uid": record.get("record_uid"),
-                        }
-                    )
         for journal in incomplete_journals(self.settings.state_dir):
             if journal.get("workflow") == workflow_name:
                 result.needs_review.append(
@@ -93,18 +79,18 @@ class MetadataQueryWorkflow:
         targets = self._targets(
             records,
             catalogue_row=catalogue_row,
-            catalogue_id=catalogue_id,
+            paper_uuid=paper_uuid,
             missing_metadata=missing_metadata,
             incomplete_records=incomplete_records,
             normalize_existing=normalize_existing,
             max_records=max_records,
         )
-        if (catalogue_row is not None or catalogue_id) and not targets:
+        if (catalogue_row is not None or paper_uuid) and not targets:
             result.needs_review.append(
                 {
                     "issue": "metadata_query_target_not_found",
                     "row": catalogue_row,
-                    "catalogue_id": catalogue_id,
+                    "paper_uuid": paper_uuid,
                 }
             )
 
@@ -123,7 +109,7 @@ class MetadataQueryWorkflow:
             )
         elif not (
             catalogue_row is not None
-            or catalogue_id
+            or paper_uuid
             or missing_metadata
             or incomplete_records
             or normalize_existing
@@ -336,10 +322,15 @@ class MetadataQueryWorkflow:
             for record in records:
                 if record.row_number not in changed_rows:
                     continue
-                relative = str(record.get("pdf_relative_path") or "").replace("\\", "/")
-                current_filename = str(record.get("pdf_filename") or "")
-                if not relative or not current_filename:
+                main_documents = [
+                    document
+                    for document in catalogue.documents_for_paper(record.get("paper_uuid"))
+                    if normalized_text(document.get("document_type")) == "main"
+                ]
+                if len(main_documents) != 1:
                     continue
+                relative = str(main_documents[0].get("relative_path") or "").replace("\\", "/")
+                current_filename = str(main_documents[0].get("filename") or "")
                 proposed = standard_pdf_filename_result(
                     title=record.get("title"),
                     year=record.get("year"),
@@ -353,7 +344,7 @@ class MetadataQueryWorkflow:
                     filename_implications.append(
                         {
                             "row": record.row_number,
-                            "record_uid": record.get("record_uid") or None,
+                            "paper_uuid": record.get("paper_uuid") or None,
                             "current_path": relative,
                             "current_filename": current_filename,
                             "proposed_filename": proposed,
@@ -372,7 +363,6 @@ class MetadataQueryWorkflow:
             "records_added": len(records_added),
             "records_updated": len(records_updated),
             "records_unchanged": len(records_unchanged),
-            "record_uids_assigned": record_uids_assigned,
         }
         result.details = {
             "version": __version__,
@@ -383,7 +373,6 @@ class MetadataQueryWorkflow:
             "records_added": records_added,
             "records_updated": records_updated,
             "records_unchanged": records_unchanged,
-            "record_uids_assigned": record_uids_assigned,
             "conflicts": conflicts,
             "downloads": download_reports,
             "final_check": {},
@@ -401,9 +390,9 @@ class MetadataQueryWorkflow:
             operations = [
                 {
                     "catalogue_row": row,
-                    "record_uid": next(
+                    "paper_uuid": next(
                         (
-                            record.get("record_uid") or None
+                            record.get("paper_uuid") or None
                             for record in catalogue.records
                             if record.row_number == row
                         ),
@@ -430,16 +419,16 @@ class MetadataQueryWorkflow:
                     catalogue.maintenance_actions
                 )
             for row in changed_rows:
-                record_uid = next(
+                paper_uuid_value = next(
                     (
-                        record.get("record_uid") or None
+                        record.get("paper_uuid") or None
                         for record in catalogue.records
                         if record.row_number == row
                     ),
                     None,
                 )
                 journal.set_operation_state(
-                    row, "catalogue_committed", record_uid=record_uid
+                    row, "catalogue_committed", paper_uuid=paper_uuid_value
                 )
 
         if catalogue.changes or result.changed_files:
@@ -513,6 +502,7 @@ class MetadataQueryWorkflow:
         report: dict[str, Any] = {
             "requested": True,
             "catalogue_row": target.row_number if target else None,
+            "paper_uuid": target.get("paper_uuid") if target else None,
             "candidates": [
                 {
                     "provider": item.provider,
@@ -585,6 +575,7 @@ class MetadataQueryWorkflow:
 
         operation = {
             "catalogue_row": target.row_number if target else None,
+            "paper_uuid": target.get("paper_uuid") if target else None,
             "execution_state": "candidate_selected",
             "provider": candidate.provider,
             "source_url": self.download_service.safe_url(candidate.source_url),
@@ -617,17 +608,37 @@ class MetadataQueryWorkflow:
         )
         if outcome.status in {"downloaded", "already_present"}:
             if target is not None:
-                updates = {
-                    key: value
-                    for key, value in {
-                        "pdf_status": PdfStatus.INBOX.value,
-                        "pdf_filename": plan.target_filename,
-                        "pdf_relative_path": f"Inbox/{plan.target_filename}",
-                        "date_updated": date.today().isoformat(),
-                    }.items()
-                    if key in catalogue.headers
+                today = date.today().isoformat()
+                paper_uuid_value = catalogue.ensure_paper_uuid(target)
+                relative_path = f"Inbox/{plan.target_filename}"
+                local_path = self.settings.library_root / relative_path
+                main_documents = [
+                    document
+                    for document in catalogue.documents_for_paper(paper_uuid_value)
+                    if normalized_text(document.get("document_type")) == "main"
+                ]
+                document_updates = {
+                    "filename": plan.target_filename,
+                    "relative_path": relative_path,
+                    "extension": ".pdf",
+                    "sha256": full_hash(local_path) if local_path.is_file() else "",
+                    "file_status": PdfStatus.INBOX.value,
+                    "date_updated": today,
                 }
-                catalogue.update_fields(target, updates)
+                if main_documents:
+                    catalogue.update_document_fields(main_documents[0], document_updates)
+                else:
+                    catalogue.add_document(
+                        {
+                            "document_id": f"{paper_uuid_value}:main",
+                            "paper_uuid": paper_uuid_value,
+                            "document_type": "main",
+                            "source": str(target.get("source") or ""),
+                            "date_added": today,
+                            **document_updates,
+                        }
+                    )
+                catalogue.update_fields(target, {"date_updated": today})
             result.completed.append(
                 {
                     "action": outcome.status,
@@ -652,7 +663,7 @@ class MetadataQueryWorkflow:
         records: list[CatalogueRecord],
         *,
         catalogue_row: int | None,
-        catalogue_id: str | None,
+        paper_uuid: str | None,
         missing_metadata: bool,
         incomplete_records: bool = False,
         normalize_existing: bool = False,
@@ -660,9 +671,13 @@ class MetadataQueryWorkflow:
     ) -> list[CatalogueRecord]:
         if catalogue_row is not None:
             return [item for item in records if item.row_number == catalogue_row]
-        if catalogue_id:
-            key = normalized_text(catalogue_id)
-            return [item for item in records if normalized_text(item.get("id")) == key]
+        if paper_uuid:
+            key = normalized_text(paper_uuid)
+            return [
+                item
+                for item in records
+                if normalized_text(item.get("paper_uuid")) == key
+            ]
         if incomplete_records or normalize_existing:
             candidates = []
             for item in records:
@@ -735,10 +750,7 @@ class MetadataQueryWorkflow:
 
     @staticmethod
     def _record_arxiv_id(record: CatalogueRecord) -> str:
-        current_id = str(record.get("id") or "")
-        if current_id.upper().startswith("ARXIV:"):
-            return current_id.split(":", 1)[1].strip()
-        return ""
+        return str(record.get("arxiv_id") or "").strip()
 
     @staticmethod
     def _record_is_incomplete(record: CatalogueRecord) -> bool:
@@ -752,19 +764,22 @@ class MetadataQueryWorkflow:
         source = str(record.get("source") or "")
         mixed_source = len([item for item in re.split(r"\s*;\s*", source) if item]) > 1
         local_primary = normalized_text(source) == "local pdf"
-        local_id = str(record.get("id") or "").upper().startswith("LOCAL:")
         missing_core = any(
             field in record.values and not record.get(field)
             for field in ("authors", "year", "journal", "abstract")
         )
         journal_incomplete = bool(record.get("journal")) != bool(record.get("journal_abbrev"))
-        return local_id or local_primary or mixed_source or missing_core or journal_incomplete
+        return local_primary or mixed_source or missing_core or journal_incomplete
 
     @staticmethod
     def _duplicates(
         catalogue: CatalogueService, metadata: MetadataRecord
     ) -> list[CatalogueRecord]:
-        for field, value in (("pmid", metadata.pmid), ("doi", metadata.doi)):
+        for field, value in (
+            ("pmid", metadata.pmid),
+            ("doi", metadata.doi),
+            ("arxiv_id", normalize_arxiv_id(metadata.arxiv_id)),
+        ):
             if value and field in catalogue.headers:
                 matches = catalogue.find_by(field, value)
                 if matches:
@@ -807,7 +822,7 @@ class MetadataQueryWorkflow:
                 conflicts.append(
                     {
                         "row": record.row_number,
-                        "record_uid": record.get("record_uid") or None,
+                        "paper_uuid": record.get("paper_uuid") or None,
                         "field": field,
                         "issue": recorded_issue_key,
                     }
@@ -831,10 +846,8 @@ class MetadataQueryWorkflow:
     ) -> dict[str, Any]:
         today = date.today().isoformat()
         values = {
-            "id": RegisteredRecordCanonicalizer.canonical_id(metadata),
             **metadata.catalogue_fields(),
             "source": RegisteredRecordCanonicalizer.canonical_source(metadata),
-            "pdf_status": PdfStatus.NOT_DOWNLOADED.value,
             "date_added": today,
             "date_updated": today,
         }

@@ -44,22 +44,18 @@ class DailyCheckWorkflow:
             [] if initial else snapshots.compare_catalogue(previous_catalogue, before_catalogue)
         )
 
-        referenced_legacy_roots = self._referenced_legacy_roots(records)
-        root_items = snapshots.root_items(referenced_legacy_roots)
-        matched_paths = (
-            self._reconcile_documents(catalogue, current_manifest, result)
-            if catalogue.has_documents_sheet
-            else self._reconcile(catalogue, current_manifest, result)
+        referenced_legacy_roots = self._referenced_legacy_roots(
+            records, catalogue.documents
         )
+        root_items = snapshots.root_items(referenced_legacy_roots)
+        matched_paths = self._reconcile_documents(catalogue, current_manifest, result)
         for key, item in current_manifest.items():
             if key not in matched_paths:
                 result.needs_review.append(
                     {
                         "file": item.relative_path,
                         "issue": (
-                            "unmatched_local_document"
-                            if catalogue.has_documents_sheet
-                            else "unmatched_local_pdf"
+                        "unmatched_local_document"
                         ),
                     }
                 )
@@ -146,116 +142,6 @@ class DailyCheckWorkflow:
         result.finalize_status()
         ReportService(self.settings.reports_dir).write(result)
         return result
-
-    def _reconcile(
-        self,
-        catalogue: CatalogueService,
-        manifest: dict[str, FileSnapshot],
-        result: WorkflowResult,
-    ) -> set[str]:
-        by_filename: dict[str, list[tuple[str, FileSnapshot]]] = defaultdict(list)
-        for key, item in manifest.items():
-            by_filename[normalized_text(item.filename)].append((key, item))
-        matched: set[str] = set()
-        today = date.today().isoformat()
-
-        for record in catalogue.records:
-            path_key = normalized_relative_path(record.get("pdf_relative_path"))
-            candidates: list[tuple[str, FileSnapshot]] = []
-            filename_key = normalized_text(record.get("pdf_filename"))
-            filename_candidates = by_filename.get(filename_key, []) if filename_key else []
-            if len(filename_candidates) == 1:
-                candidates = filename_candidates
-            elif len(filename_candidates) > 1:
-                path_matches = [item for item in filename_candidates if item[0] == path_key]
-                candidates = path_matches if len(path_matches) == 1 else filename_candidates
-            elif path_key and path_key in manifest:
-                candidates = [(path_key, manifest[path_key])]
-
-            if len(candidates) > 1:
-                outcome = catalogue.ensure_review_blocker(
-                    record,
-                    "pdf_file",
-                    "Multiple local PDFs share the catalogue filename.",
-                    issue_key="multiple_filename_matches",
-                )
-                self._objective_update(
-                    catalogue,
-                    record,
-                    {"pdf_status": PdfStatus.UNCLEAR.value},
-                    today,
-                )
-                self._record_review(
-                    result,
-                    outcome,
-                    {"row": record.row_number, "issue": "multiple_filename_matches"},
-                )
-                continue
-
-            if not candidates:
-                if self._record_legacy_location(catalogue, record, result, today):
-                    continue
-                prior_status = normalized_text(record.get("pdf_status"))
-                expects_file = bool(path_key or record.get("pdf_filename")) or prior_status in {
-                    PdfStatus.INBOX.value,
-                    PdfStatus.REGISTERED.value,
-                    PdfStatus.FILED.value,
-                    PdfStatus.MISSING.value,
-                    PdfStatus.UNCLEAR.value,
-                }
-                if expects_file:
-                    outcome = catalogue.ensure_review_blocker(
-                        record,
-                        "pdf_file",
-                        "Catalogue expects a PDF but no local file was found.",
-                        issue_key="expected_pdf_missing",
-                    )
-                    self._objective_update(
-                        catalogue,
-                        record,
-                        {"pdf_status": PdfStatus.MISSING.value},
-                        today,
-                    )
-                    self._record_review(
-                        result,
-                        outcome,
-                        {"row": record.row_number, "issue": "expected_pdf_missing"},
-                    )
-                continue
-
-            key, item = candidates[0]
-            matched.add(key)
-            status, mismatch = self._status_for(
-                item.relative_path, record.get("topic_folder")
-            )
-            self._objective_update(
-                catalogue,
-                record,
-                {
-                    "pdf_status": status.value,
-                    "pdf_filename": item.filename,
-                    "pdf_relative_path": item.relative_path,
-                },
-                today,
-            )
-            if mismatch:
-                issue = f"Observed location {item.relative_path!r} differs from topic_folder."
-                outcome = catalogue.ensure_review_blocker(
-                    record,
-                    "pdf_relative_path",
-                    issue,
-                    issue_key="topic_location_mismatch",
-                )
-                self._record_review(
-                    result,
-                    outcome,
-                    {
-                        "row": record.row_number,
-                        "file": item.relative_path,
-                        "issue": "topic_location_mismatch",
-                    },
-                )
-        return matched
 
     def _reconcile_documents(
         self,
@@ -408,37 +294,6 @@ class DailyCheckWorkflow:
         if current != updated:
             catalogue.update_document_fields(document, {"uncertainty": updated})
 
-    @staticmethod
-    def _record_review(
-        result: WorkflowResult,
-        outcome: str,
-        item: dict[str, Any],
-    ) -> None:
-        if outcome in {"added", "existing"}:
-            if item not in result.needs_review:
-                result.needs_review.append(item)
-        else:
-            acknowledged = {**item, "reason": f"review_{outcome}"}
-            if acknowledged not in result.skipped:
-                result.skipped.append(acknowledged)
-
-    @staticmethod
-    def _objective_update(
-        catalogue: CatalogueService,
-        record: Any,
-        updates: dict[str, Any],
-        today: str,
-    ) -> None:
-        proposed = {
-            key: value
-            for key, value in updates.items()
-            if key in catalogue.headers and record.get(key, None) != value
-        }
-        if proposed and "date_updated" in catalogue.headers:
-            proposed["date_updated"] = today
-        if proposed:
-            catalogue.update_fields(record, proposed)
-
     def _status_for(self, relative_path: str, topic_folder: object) -> tuple[PdfStatus, bool]:
         parts = relative_path.replace("\\", "/").split("/")
         top = parts[0].casefold() if parts else ""
@@ -463,68 +318,22 @@ class DailyCheckWorkflow:
             return PdfStatus.UNCLEAR, bool(topic)
         return PdfStatus.UNCLEAR, False
 
-    def _record_legacy_location(
-        self,
-        catalogue: CatalogueService,
-        record: Any,
-        result: WorkflowResult,
-        today: str,
-    ) -> bool:
-        relative = str(record.get("pdf_relative_path") or "").strip()
-        if not relative:
-            return False
-        path = (self.settings.library_root / relative).resolve()
-        try:
-            parts = path.relative_to(self.settings.library_root.resolve()).parts
-        except ValueError:
-            return False
-        if len(parts) < 2 or not path.is_file() or path.suffix.casefold() != ".pdf":
-            return False
-        policy = DirectoryPolicy(
-            self.settings.library_root,
-            self.settings.reserved_root_directories,
-        )
-        kind = policy.classify_root_directory(
-            parts[0], referenced_legacy_roots={parts[0]}
-        )
-        if kind != RootDirectoryKind.LEGACY_TOPIC_CANDIDATE:
-            return False
-        self._objective_update(
-            catalogue,
-            record,
-            {"pdf_status": PdfStatus.UNCLEAR.value},
-            today,
-        )
-        outcome = catalogue.ensure_review_blocker(
-            record,
-            "pdf_relative_path",
-            "Registered PDF remains in a legacy root-level topic directory; run migrate-topics.",
-            issue_key="legacy_topic_location",
-        )
-        self._record_review(
-            result,
-            outcome,
-            {
-                "row": record.row_number,
-                "file": relative.replace("\\", "/"),
-                "issue": "legacy_topic_location",
-            },
-        )
-        return True
-
-    def _referenced_legacy_roots(self, records: list[Any]) -> set[str]:
+    def _referenced_legacy_roots(
+        self, records: list[Any], documents: list[Any]
+    ) -> set[str]:
         policy = DirectoryPolicy(
             self.settings.library_root,
             self.settings.reserved_root_directories,
         )
         roots: set[str] = set()
-        for record in records:
-            relative = str(record.get("pdf_relative_path") or "").strip().replace("\\", "/")
+        for document in documents:
+            relative = str(document.get("relative_path") or "").strip().replace("\\", "/")
             if relative:
                 first = relative.split("/", 1)[0]
                 kind = policy.classify_root_directory(first)
                 if kind == RootDirectoryKind.UNKNOWN:
                     roots.add(first)
+        for record in records:
             topic = str(record.get("topic_folder") or "").strip().replace("\\", "/")
             if topic.casefold().startswith("topics/"):
                 topic = topic.split("/", 1)[1]
@@ -545,7 +354,11 @@ class DailyCheckWorkflow:
             ]
             if missing:
                 candidates.append(
-                    {"row": record.row_number, "id": record.get("id"), "missing_fields": missing}
+                    {
+                        "row": record.row_number,
+                        "paper_uuid": record.get("paper_uuid"),
+                        "missing_fields": missing,
+                    }
                 )
         return candidates
 

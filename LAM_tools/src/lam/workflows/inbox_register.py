@@ -97,7 +97,7 @@ class InboxRegisterWorkflow:
         return self._discover_inbox()[0]
 
     def _discover_inbox_documents(self) -> tuple[list[Path], list[dict[str, Any]]]:
-        """Discover supported 0.5.1 document files without opening their content."""
+        """Discover supported managed document files without opening their content."""
         eligible: list[Path] = []
         skipped: list[dict[str, Any]] = []
         if not self.settings.inbox_dir.is_dir():
@@ -152,7 +152,7 @@ class InboxRegisterWorkflow:
         uncertainty = str(record.get("uncertainty") or "") if record else ""
         identity_confirmation = confirmation_for(uncertainty, "paper_identity")
         local = inspection.local_metadata or {}
-        catalogue_id = str(record.get("id") or "") if record else ""
+        paper_uuid = str(record.get("paper_uuid") or "") if record else ""
         supporting = {
             "title": (
                 confirmed_value(uncertainty, "title")
@@ -206,7 +206,7 @@ class InboxRegisterWorkflow:
                     authors=supporting["authors"] or None,
                     year=supporting["year"] or None,
                     journal=supporting["journal"] or None,
-                    catalogue_id=catalogue_id or None,
+                    paper_uuid=paper_uuid or None,
                     user_confirmed_identity=identity_confirmation is not None,
                     source_pdf=relative,
                     candidate_source=source,
@@ -563,11 +563,7 @@ class InboxRegisterWorkflow:
     ) -> dict[str, Any]:
         today = date.today().isoformat()
         values = {
-            "id": metadata.canonical_id,
             **metadata.catalogue_fields(),
-            "pdf_status": PdfStatus.INBOX.value,
-            "pdf_filename": filename,
-            "pdf_relative_path": relative,
             "date_added": today,
             "date_updated": today,
         }
@@ -598,6 +594,7 @@ class InboxRegisterWorkflow:
                         )
                     ),
                     "source_path": item.get("source_path"),
+                    "paper_uuid": item.get("paper_uuid"),
                     "size": inspection.get("size"),
                     "mtime_ns": inspection.get("mtime_ns"),
                     "issue_keys": sorted(set(item.get("issue_keys") or [])),

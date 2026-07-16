@@ -33,6 +33,7 @@ from .workflows.daily_check import DailyCheckWorkflow
 from .workflows.doctor import DoctorWorkflow
 from .workflows.document_migration import DocumentMigrationWorkflow
 from .workflows.inbox_register import InboxRegisterWorkflow
+from .workflows.identifier_migration import IdentifierMigrationWorkflow
 from .workflows.metadata_query import MetadataQueryWorkflow
 from .workflows.publication_type_repair import PublicationTypeRepairWorkflow
 from .workflows.record_normalization import RecordNormalizationWorkflow
@@ -104,6 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=command_definition("migrate-documents").purpose,
     )
     migrate_documents.add_argument("--apply", action="store_true")
+    migrate_identifiers = subparsers.add_parser(
+        "migrate-identifiers",
+        parents=[common],
+        help=command_definition("migrate-identifiers").purpose,
+    )
+    migrate_identifiers.add_argument("--apply", action="store_true")
     register = subparsers.add_parser(
         "register", parents=[common], help=command_definition("register").purpose
     )
@@ -129,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--doi")
     search.add_argument("--title")
     search.add_argument("--arxiv-id")
-    search.add_argument("--catalogue-id")
+    search.add_argument("--paper-uuid")
     search.add_argument("--row", type=int)
     search.add_argument("--missing-metadata", action="store_true")
     search.add_argument("--incomplete-records", action="store_true")
@@ -274,6 +281,12 @@ def _run_command(args: argparse.Namespace, settings: Settings):
                 "migrate-documents requires exactly one of --dry-run or --apply"
             )
         return DocumentMigrationWorkflow(settings).run(dry_run=args.dry_run)
+    if args.command == "migrate-identifiers":
+        if args.dry_run == args.apply:
+            raise ConfigurationError(
+                "migrate-identifiers requires exactly one of --dry-run or --apply"
+            )
+        return IdentifierMigrationWorkflow(settings).run(dry_run=args.dry_run)
     if args.command == "register":
         if args.max_files is not None and args.max_files <= 0:
             raise ConfigurationError("--max-files must be greater than zero")
@@ -304,7 +317,7 @@ def _run_command(args: argparse.Namespace, settings: Settings):
             args.doi,
             args.title,
             args.arxiv_id,
-            args.catalogue_id,
+            args.paper_uuid,
             args.row is not None,
             args.missing_metadata,
             args.incomplete_records,
@@ -337,7 +350,7 @@ def _run_command(args: argparse.Namespace, settings: Settings):
         request,
         dry_run=args.dry_run,
         catalogue_row=args.row,
-        catalogue_id=args.catalogue_id,
+        paper_uuid=args.paper_uuid,
         missing_metadata=args.missing_metadata,
         incomplete_records=args.incomplete_records,
         normalize_existing=args.normalize_existing,

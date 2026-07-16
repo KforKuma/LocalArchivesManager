@@ -46,8 +46,8 @@ Directory meanings:
 - `Inbox/`: newly introduced files that have not completed identification and registration.
 - `Registered/`: files that have been matched to `catalogue.xlsx`, given a safe standard filename, and registered, but have not yet been filed by `topic_folder`.
 - `Topics/`: the only parent namespace for final topic folders. `topic_folder`
-  stores a path relative to this directory, while `pdf_relative_path` includes
-  the leading `Topics/` component.
+  stores a path relative to this directory, while `Documents.relative_path`
+  includes the leading `Topics/` component.
 - `.library_state/`: machine-maintained derived state used for incremental comparison. It is not a user-facing source of truth.
 
 ---
@@ -63,7 +63,7 @@ Use the following authority hierarchy:
 Interpretation:
 
 - `topic_folder` describes the intended final folder.
-- `pdf_relative_path` describes the currently observed file location.
+- `Documents.relative_path` describes the currently observed file location.
 - A disagreement between the catalogue and filesystem is a discrepancy to reconcile or report, not a reason to silently rewrite either side.
 - A disagreement involving `.library_state/` normally means that the snapshot is stale and must be refreshed.
 
@@ -125,14 +125,12 @@ equivalent `<path>`; it must not otherwise change the user's classification.
 ### Machine identity fields
 
 ```text
-record_uid
-id
+paper_uuid
 ```
 
-`record_uid` is an immutable UUID for the Catalogue row and must never be
-changed after assignment. `id` is the user-facing canonical paper identifier
-and may be upgraded only after durable high-confidence identification, using
-`PMID:` before `DOI:`, `ARXIV:`, and `LOCAL:`.
+`paper_uuid` is the immutable, non-empty UUID4 for the Catalogue row and must
+never change after assignment. PMID, DOI, and arXiv ID are external identifiers
+stored in their dedicated columns; they are never row identities.
 
 ### Machine-fillable metadata fields
 
@@ -146,6 +144,7 @@ journal
 journal_abbrev
 doi
 pmid
+arxiv_id
 publication_type
 abstract
 keywords
@@ -165,14 +164,14 @@ The following fields may be maintained by the workflows:
 ```text
 auto_tags
 suggested_topic
-pdf_status
-pdf_filename
-pdf_relative_path
 source
 date_added
 date_updated
 uncertainty
 ```
+
+File state, name, path, hash, source, and file-level uncertainty are maintained
+only in `Documents`.
 
 Machine updates must still preserve protected user text and be logged.
 

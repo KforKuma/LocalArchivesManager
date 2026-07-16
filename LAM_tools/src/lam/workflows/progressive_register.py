@@ -180,6 +180,10 @@ class ProgressiveInboxRegisterWorkflow:
             file_result = self._new_file_result(relative, evidence)
             file_results.append(file_result)
             source_sha256 = ""
+            historical_document = None
+            existing = self._existing_local_record(
+                catalogue, records, relative, source.name, source
+            )
             if catalogue.has_documents_sheet:
                 try:
                     source_sha256 = full_hash(source)
@@ -197,26 +201,39 @@ class ProgressiveInboxRegisterWorkflow:
                 duplicates = catalogue.find_documents_by("sha256", source_sha256)
                 if duplicates:
                     existing_document = duplicates[0]
-                    file_result["issue_keys"].append("duplicate_file_exact")
-                    file_result["details"] = {
-                        "existing_document_id": existing_document.get("document_id"),
-                        "existing_path": existing_document.get("relative_path"),
-                    }
-                    result.needs_review.append(
-                        {
-                            "file": relative,
-                            "issue": "duplicate_file_exact",
-                            **file_result["details"],
-                        }
+                    reconnects_historical_provisional = (
+                        len(duplicates) == 1
+                        and existing is not None
+                        and self._is_provisional(existing)
+                        and normalized_text(existing_document.get("paper_uuid"))
+                        == normalized_text(existing.get("paper_uuid"))
+                        and normalized_relative_path(existing_document.get("relative_path"))
+                        == normalized_relative_path(relative)
                     )
-                    continue
-            existing = self._existing_local_record(records, relative, source.name, source)
+                    if reconnects_historical_provisional:
+                        historical_document = existing_document
+                        file_result["historical_document_reconnected"] = True
+                    else:
+                        file_result["issue_keys"].append("duplicate_file_exact")
+                        file_result["details"] = {
+                            "existing_document_id": existing_document.get("document_id"),
+                            "existing_path": existing_document.get("relative_path"),
+                        }
+                        result.needs_review.append(
+                            {
+                                "file": relative,
+                                "issue": "duplicate_file_exact",
+                                **file_result["details"],
+                            }
+                        )
+                        continue
             formal_records = [row for row in records if not self._is_provisional(row)]
             initial_match = matcher.match(
                 formal_records,
                 relative_path=relative,
                 filename=source.name,
                 inspection=inspection,
+                documents=catalogue.documents,
             )
             record = self.owner._record_for_match(formal_records, initial_match.matched_row_id)
             identity_confirmed = initial_match.status in {
@@ -231,28 +248,15 @@ class ProgressiveInboxRegisterWorkflow:
             elif existing is not None and record is None:
                 record = existing
 
-            file_result["catalogue_id"] = str(record.get("id") or "") if record else None
+            file_result["paper_uuid"] = (
+                str(record.get("paper_uuid") or "") if record else None
+            )
             self._set_match_report(file_result, initial_match)
 
             attempted_signatures: set[tuple[Any, ...]] = set()
             last_lookup_issue = "metadata_identity_unconfirmed"
             last_lookup_detail = PROVISIONAL_BLOCKER
             hard_issue: tuple[str, str] | None = None
-
-            if not identity_confirmed and self._lookup_worthy(inspection, record):
-                outcome = self._lookup_and_apply(
-                    catalogue,
-                    records,
-                    record,
-                    inspection,
-                    file_result,
-                    attempted_signatures,
-                )
-                record, identity_confirmed, issue_key, issue, attempts = outcome
-                lookup_count += attempts
-                last_lookup_issue, last_lookup_detail = issue_key, issue
-                if identity_confirmed:
-                    provisional_updated += int(self._is_provisional(record))
 
             content_allowed = not (filename_only or skip_pdf_text)
             decision = should_inspect_pdf(
@@ -295,6 +299,7 @@ class ProgressiveInboxRegisterWorkflow:
                         relative_path=relative,
                         filename=source.name,
                         inspection=inspection,
+                        documents=catalogue.documents,
                     )
                     self._set_match_report(file_result, local_match)
                     matched = self.owner._record_for_match(
@@ -328,17 +333,13 @@ class ProgressiveInboxRegisterWorkflow:
                     lookup_count += attempts
                     last_lookup_issue, last_lookup_detail = issue_key, issue
 
-                if hard_issue is None and not identity_confirmed and self._is_provisional(record):
-                    local_confirmed, local_issue, local_detail = self._apply_local_fallback(
-                        catalogue, record, inspection, file_result
-                    )
-                    if local_confirmed:
-                        identity_confirmed = True
-                    elif local_issue:
-                        last_lookup_issue, last_lookup_detail = local_issue, local_detail
-
-                pypdf_sufficient = (
-                    False if ocr_mode == "always" else self._pypdf_sufficient(inspection)
+                provider_requires_regating = self._provider_failure_requires_ocr(
+                    file_result
+                )
+                pypdf_sufficient = False if ocr_mode == "always" else (
+                    self._local_metadata_complete(inspection)
+                    if provider_requires_regating
+                    else self._pypdf_sufficient(inspection)
                 )
                 decision = should_inspect_pdf(
                     identity_confirmed=identity_confirmed,
@@ -351,6 +352,12 @@ class ProgressiveInboxRegisterWorkflow:
                     ),
                 )
                 if hard_issue is None and decision == InspectionLevel.OCR:
+                    ocr_trigger_reason = (
+                        "provider_not_found_local_metadata_incomplete"
+                        if provider_requires_regating
+                        else "local_metadata_incomplete"
+                    )
+                    file_result["ocr_trigger_reason"] = ocr_trigger_reason
                     try:
                         inspection = pdfs.inspect(
                             source,
@@ -359,6 +366,7 @@ class ProgressiveInboxRegisterWorkflow:
                             ocr_languages=ocr_languages,
                             ocr_dpi=ocr_dpi,
                             ocr_gpu=ocr_gpu,
+                            ocr_trigger_reason=ocr_trigger_reason,
                             run_id=run_id,
                             ocr_cache_write=not dry_run,
                         )
@@ -376,11 +384,15 @@ class ProgressiveInboxRegisterWorkflow:
                     if hard_issue is None:
                         ocr = inspection.ocr_result
                         if ocr is None or ocr.status != "success":
-                            hard_issue = (
+                            last_lookup_issue, last_lookup_detail = (
                                 ocr.status if ocr is not None else "ocr_unavailable",
-                                "First-page OCR did not produce usable identification evidence.",
+                                "First-page OCR was unavailable; retained usable pypdf evidence.",
                             )
-                    if hard_issue is None:
+                    if (
+                        hard_issue is None
+                        and inspection.ocr_result is not None
+                        and inspection.ocr_result.status == "success"
+                    ):
                         formal_records = [
                             row for row in records if not self._is_provisional(row)
                         ]
@@ -389,6 +401,7 @@ class ProgressiveInboxRegisterWorkflow:
                             relative_path=relative,
                             filename=source.name,
                             inspection=inspection,
+                            documents=catalogue.documents,
                         )
                         if self.owner._unsupported_ocr_title_only_match(
                             ocr_match, inspection, formal_records
@@ -438,16 +451,32 @@ class ProgressiveInboxRegisterWorkflow:
                         lookup_count += attempts
                         last_lookup_issue, last_lookup_detail = issue_key, issue
 
-                    if hard_issue is None and not identity_confirmed and self._is_provisional(record):
-                        local_confirmed, local_issue, local_detail = self._apply_local_fallback(
-                            catalogue, record, inspection, file_result
-                        )
-                        if local_confirmed:
-                            identity_confirmed = True
-                        elif local_issue:
-                            last_lookup_issue, last_lookup_detail = local_issue, local_detail
+            if hard_issue is None and not identity_confirmed and self._is_provisional(record):
+                local_confirmed, local_issue, local_detail = self._apply_local_fallback(
+                    catalogue, record, inspection, file_result
+                )
+                if local_confirmed:
+                    identity_confirmed = True
+                elif local_issue:
+                    last_lookup_issue, last_lookup_detail = local_issue, local_detail
+            elif not identity_confirmed and self._lookup_worthy(inspection, record):
+                # Explicit filename-only modes still permit Workflow 2; they
+                # simply opt out of page-content extraction and OCR.
+                outcome = self._lookup_and_apply(
+                    catalogue,
+                    records,
+                    record,
+                    inspection,
+                    file_result,
+                    attempted_signatures,
+                )
+                record, identity_confirmed, issue_key, issue, attempts = outcome
+                lookup_count += attempts
+                last_lookup_issue, last_lookup_detail = issue_key, issue
 
-            file_result["catalogue_id"] = str(record.get("id") or "") if record else None
+            file_result["paper_uuid"] = (
+                str(record.get("paper_uuid") or "") if record else None
+            )
             if identity_confirmed and hard_issue is None:
                 catalogue.resolve_confirmed_reviews(record)
                 active = catalogue.active_review_lines(record)
@@ -464,7 +493,7 @@ class ProgressiveInboxRegisterWorkflow:
                     )
                     provisional_created += 1
                     file_result["provisional_created"] = True
-                    file_result["catalogue_id"] = str(record.get("id") or "")
+                    file_result["paper_uuid"] = str(record.get("paper_uuid") or "")
                 issue_key, issue = hard_issue or (last_lookup_issue, last_lookup_detail)
                 self._retain_provisional(
                     catalogue,
@@ -490,45 +519,30 @@ class ProgressiveInboxRegisterWorkflow:
                     blocked=True,
                 )
                 continue
-            if catalogue.has_documents_sheet:
-                paper_uuid = catalogue.ensure_paper_uuid(record)
-                main_documents = [
-                    item
-                    for item in catalogue.documents_for_paper(paper_uuid)
-                    if normalized_text(item.get("document_type")) == "main"
-                ]
-                current_path = (
-                    normalized_relative_path(main_documents[0].get("relative_path"))
-                    if len(main_documents) == 1
-                    else ""
-                )
-            else:
-                current_path = normalized_relative_path(record.get("pdf_relative_path"))
+            paper_uuid = catalogue.ensure_paper_uuid(record)
+            main_documents = [
+                item
+                for item in catalogue.documents_for_paper(paper_uuid)
+                if normalized_text(item.get("document_type")) == "main"
+            ]
+            current_path = (
+                normalized_relative_path(main_documents[0].get("relative_path"))
+                if len(main_documents) == 1
+                else ""
+            )
             if current_path and current_path != normalized_relative_path(relative):
-                if catalogue.has_documents_sheet:
-                    file_result["issue_keys"].append("duplicate_paper_confirmed")
-                    file_result["details"] = {
-                        "existing_record": record.get("paper_uuid"),
-                        "existing_path": current_path,
+                file_result["issue_keys"].append("duplicate_paper_confirmed")
+                file_result["details"] = {
+                    "existing_record": record.get("paper_uuid"),
+                    "existing_path": current_path,
+                }
+                result.needs_review.append(
+                    {
+                        "file": relative,
+                        "issue": "duplicate_paper_confirmed",
+                        **file_result["details"],
                     }
-                    result.needs_review.append(
-                        {
-                            "file": relative,
-                            "issue": "duplicate_paper_confirmed",
-                            **file_result["details"],
-                        }
-                    )
-                else:
-                    self._retain_provisional(
-                        catalogue,
-                        record,
-                        result,
-                        file_result,
-                        "multiple_local_files_for_single_row",
-                        "Catalogue row already points to another local PDF.",
-                        relative,
-                        blocked=True,
-                    )
+                )
                 continue
 
             confirmed_title = self.owner._confirmed_value(record, "title")
@@ -558,10 +572,7 @@ class ProgressiveInboxRegisterWorkflow:
                     blocked=True,
                 )
                 continue
-            if catalogue.has_documents_sheet:
-                catalogue.ensure_paper_uuid(record)
-            else:
-                catalogue.ensure_record_uid(record)
+            catalogue.ensure_paper_uuid(record)
             catalogue.repair_publication_type(record, record.get("publication_type"))
             publication_warnings = tuple(
                 dict.fromkeys(
@@ -620,15 +631,7 @@ class ProgressiveInboxRegisterWorkflow:
             target_relative = operation.target.relative_to(
                 self.settings.library_root
             ).as_posix()
-            updates = (
-                {}
-                if catalogue.has_documents_sheet
-                else {
-                    "pdf_status": PdfStatus.REGISTERED.value,
-                    "pdf_filename": target_filename,
-                    "pdf_relative_path": target_relative,
-                }
-            )
+            updates: dict[str, Any] = {}
             if not record.get("title") and confirmed_title:
                 updates["title"] = confirmed_title
             if not record.get("year") and confirmed_year:
@@ -653,6 +656,7 @@ class ProgressiveInboxRegisterWorkflow:
                     "operation": operation,
                     "updates": updates,
                     "sha256": source_sha256,
+                    "existing_document": historical_document,
                     "file_result": file_result,
                 }
             )
@@ -773,11 +777,7 @@ class ProgressiveInboxRegisterWorkflow:
             result.changed_rows = len({change.row_number for change in catalogue.changes})
             result.details["remaining_in_inbox"] = [
                 path.relative_to(self.settings.library_root).as_posix()
-                for path in (
-                    self.owner._eligible_document_files()
-                    if catalogue.has_documents_sheet
-                    else self.owner._eligible_pdf_files()
-                )
+                for path in self.owner._eligible_document_files()
             ]
             result.finalize_status()
             ReportService(self.settings.reports_dir).write(result)
@@ -799,30 +799,35 @@ class ProgressiveInboxRegisterWorkflow:
                 updates = dict(item["updates"])
                 if "date_updated" in catalogue.headers:
                     updates["date_updated"] = today
-                if catalogue.has_documents_sheet:
-                    paper_uuid = catalogue.ensure_paper_uuid(record)
-                    document_id = f"{paper_uuid}:main"
+                paper_uuid = catalogue.ensure_paper_uuid(record)
+                document_id = f"{paper_uuid}:main"
+                document_values = {
+                    "filename": operation.target.name,
+                    "relative_path": operation.target.relative_to(
+                        self.settings.library_root
+                    ).as_posix(),
+                    "extension": operation.target.suffix,
+                    "sha256": item.get("sha256") or full_hash(operation.target),
+                    "file_status": PdfStatus.REGISTERED.value,
+                    "source": str(record.get("source") or ""),
+                    "date_updated": today,
+                }
+                if item.get("existing_document") is not None:
+                    catalogue.update_document_fields(
+                        item["existing_document"], document_values
+                    )
+                else:
                     catalogue.add_document(
                         {
                             "document_id": document_id,
                             "paper_uuid": paper_uuid,
                             "document_type": "main",
-                            "filename": operation.target.name,
-                            "relative_path": operation.target.relative_to(
-                                self.settings.library_root
-                            ).as_posix(),
-                            "extension": operation.target.suffix,
-                            "sha256": item.get("sha256") or full_hash(operation.target),
-                            "file_status": PdfStatus.REGISTERED.value,
-                            "source": str(record.get("source") or ""),
                             "date_added": str(record.get("date_added") or today),
-                            "date_updated": today,
+                            **document_values,
                         }
                     )
-                    item["document_id"] = document_id
-                    if updates:
-                        catalogue.update_fields(record, updates)
-                else:
+                item["document_id"] = document_id
+                if updates:
                     catalogue.update_fields(record, updates)
                 item["file_result"]["action"] = "registered"
                 item["file_result"]["result_status"] = InboxItemStatus.REGISTERED.value
@@ -835,18 +840,11 @@ class ProgressiveInboxRegisterWorkflow:
                     }
                 )
                 if journal:
-                    if catalogue.has_documents_sheet:
-                        journal.set_operation_state(
-                            record.row_number,
-                            "file_moved",
-                            document_id=item.get("document_id"),
-                        )
-                    else:
-                        journal.set_operation_state(
-                            record.row_number,
-                            "file_moved",
-                            record_uid=str(record.get("record_uid") or "") or None,
-                        )
+                    journal.set_operation_state(
+                        record.row_number,
+                        "file_moved",
+                        document_id=item.get("document_id"),
+                    )
             except (FileOperationError, CatalogueError) as exc:
                 self._retain_provisional(
                     catalogue,
@@ -862,16 +860,7 @@ class ProgressiveInboxRegisterWorkflow:
                     journal.set_operation_state(
                         record.row_number,
                         "failed",
-                        document_id=(
-                            f"{record.get('paper_uuid')}:main"
-                            if catalogue.has_documents_sheet
-                            else None
-                        ),
-                        record_uid=(
-                            None
-                            if catalogue.has_documents_sheet
-                            else str(record.get("record_uid") or "") or None
-                        ),
+                        document_id=f"{record.get('paper_uuid')}:main",
                         error=str(exc),
                     )
 
@@ -928,18 +917,11 @@ class ProgressiveInboxRegisterWorkflow:
             )
         if journal:
             for item in moved:
-                if catalogue.has_documents_sheet:
-                    journal.set_operation_state(
-                        item["record"].row_number,
-                        "catalogue_committed",
-                        document_id=item.get("document_id"),
-                    )
-                else:
-                    journal.set_operation_state(
-                        item["record"].row_number,
-                        "catalogue_committed",
-                        record_uid=str(item["record"].get("record_uid") or "") or None,
-                    )
+                journal.set_operation_state(
+                    item["record"].row_number,
+                    "catalogue_committed",
+                    document_id=item.get("document_id"),
+                )
             for item in supplementary_moved:
                 journal.set_operation_state(
                     item["catalogue_row"],
@@ -1281,8 +1263,7 @@ class ProgressiveInboxRegisterWorkflow:
                 attempts_made,
             )
         file_result["canonicalization"] = {
-            "record_uid": canonical.record_uid,
-            "canonical_id": canonical.canonical_id,
+            "paper_uuid": canonical.paper_uuid,
             "canonical_source": canonical.canonical_source,
             "changed_fields": canonical.changed_fields,
         }
@@ -1290,7 +1271,7 @@ class ProgressiveInboxRegisterWorkflow:
         file_result.update(
             {
                 "match_status": MatchStatus.EXACT.value,
-                "matched_catalogue_id": str(record.get("id") or ""),
+                "matched_paper_uuid": str(record.get("paper_uuid") or ""),
                 "match_method": "workflow2_provider",
                 "canonical_title_selected": metadata.title,
                 "canonical_title_source": "provider",
@@ -1337,8 +1318,11 @@ class ProgressiveInboxRegisterWorkflow:
             )
         updates: dict[str, Any] = {}
         used_fields: list[str] = []
+        allowed_fields = {"title", "authors", "year", "journal", "doi", "abstract"}
+        field_sources = dict(local.get("field_sources") or {})
+        field_confidence = dict(local.get("field_confidence") or {})
         for field_name, value in local.items():
-            if field_name in {"abstract", "field_sources", "warnings"}:
+            if field_name not in allowed_fields:
                 continue
             if field_name not in catalogue.headers or value in (None, "", [], ()):
                 continue
@@ -1351,14 +1335,16 @@ class ProgressiveInboxRegisterWorkflow:
         if "source" in catalogue.headers:
             updates["source"] = "local_pdf"
         if updates:
-            catalogue.ensure_record_uid(record)
+            catalogue.ensure_paper_uuid(record)
             catalogue.update_provisional_fields(record, updates)
         for field_name in used_fields:
             catalogue.add_uncertainty(
                 record,
                 "MACHINE_NOTE:",
                 field_name,
-                "High-quality first-page PDF metadata filled a blank catalogue field.",
+                "High-quality first-page PDF metadata filled a blank catalogue field; "
+                f"source={field_sources.get(field_name, 'local_pdf')}; "
+                f"confidence={field_confidence.get(field_name, 'medium')}.",
                 issue_key="local_pdf_metadata_used",
             )
         merged, field_sources, conflicts = self.owner.build_merged_identity_evidence(
@@ -1375,13 +1361,13 @@ class ProgressiveInboxRegisterWorkflow:
         file_result["local_pdf_metadata_used"] = used_fields
         file_result["final_field_sources"] = field_sources
         file_result["durable_identity_reason"] = reason
-        if confirmed:
+        if confirmed and catalogue.has_user_confirmation(record, "paper_identity"):
             resolved = self._resolved_provisional_uncertainty(record)
             catalogue.update_provisional_fields(record, {"uncertainty": resolved})
             file_result.update(
                 {
                     "match_status": MatchStatus.HIGH_CONFIDENCE.value,
-                    "matched_catalogue_id": str(record.get("id") or ""),
+                    "matched_paper_uuid": str(record.get("paper_uuid") or ""),
                     "match_method": "local_pdf_merged",
                     "canonical_title_selected": str(record.get("title") or ""),
                     "canonical_title_source": field_sources.get("title", "local_pdf"),
@@ -1404,6 +1390,7 @@ class ProgressiveInboxRegisterWorkflow:
         evidence: FilenameEvidence,
         inspection: PdfInspection,
     ) -> CatalogueRecord:
+        local = inspection.local_metadata or {}
         administrative_title = re.compile(
             r"^(?:accepted|received|published(?:\s+online)?|pii\s*:|doi\s*:|copyright)\b",
             re.I,
@@ -1451,19 +1438,41 @@ class ProgressiveInboxRegisterWorkflow:
             f"issue=Current title was derived from {title_source} evidence."
         )
         values = {
-            "id": f"LOCAL:{uuid.uuid4()}",
-            "title": title,
-            "year": evidence.year,
-            "journal": evidence.journal,
-            "publication_type": evidence.publication_type,
-            "pdf_status": PdfStatus.INBOX.value,
-            "pdf_filename": filename,
-            "pdf_relative_path": relative,
+            "paper_uuid": str(uuid.uuid4()),
+            "title": str(local.get("title") or title),
+            "authors": (
+                "; ".join(local.get("authors") or ())
+                if isinstance(local.get("authors"), (list, tuple))
+                else local.get("authors")
+            ),
+            "year": str(local.get("year") or evidence.year or ""),
+            "journal": str(local.get("journal") or evidence.journal or ""),
+            "doi": str(local.get("doi") or ""),
+            "abstract": str(local.get("abstract") or ""),
             "source": "local_pdf",
             "date_added": today,
             "date_updated": today,
             "uncertainty": uncertainty,
         }
+        notes = []
+        sources = dict(local.get("field_sources") or {})
+        confidence = dict(local.get("field_confidence") or {})
+        for field_name in ("title", "authors", "year", "journal", "doi", "abstract"):
+            if values.get(field_name):
+                notes.append(
+                    "MACHINE_NOTE: "
+                    f"field={field_name}; issue_key=local_pdf_metadata_used; "
+                    f"issue=source={sources.get(field_name, title_source)}; "
+                    f"confidence={confidence.get(field_name, 'medium')}."
+                )
+        english_title = str(local.get("english_title") or "")
+        if english_title and english_title != values["title"]:
+            safe_english = re.sub(r"[\r\n;]+", " ", english_title).strip()[:300]
+            notes.append(
+                "MACHINE_NOTE: field=title; issue_key=local_english_title_candidate; "
+                f"issue=English search title: {safe_english}"
+            )
+        values["uncertainty"] = "\n".join([uncertainty, *notes])
         return catalogue.add_record(values)
 
     def _retain_provisional(
@@ -1513,13 +1522,6 @@ class ProgressiveInboxRegisterWorkflow:
                         issue,
                         issue_key=issue_key,
                     )
-            updates = {
-                "pdf_status": PdfStatus.INBOX.value,
-                "pdf_filename": Path(relative).name,
-                "pdf_relative_path": relative,
-                "date_updated": date.today().isoformat(),
-            }
-            catalogue.update_provisional_fields(record, updates)
         else:
             blocker_outcome = catalogue.ensure_review_blocker(
                 record,
@@ -1600,6 +1602,27 @@ class ProgressiveInboxRegisterWorkflow:
         )
 
     @staticmethod
+    def _local_metadata_complete(inspection: PdfInspection) -> bool:
+        local = inspection.local_metadata or {}
+        return all(
+            bool(local.get(field_name))
+            for field_name in ("authors", "journal", "abstract", "english_title")
+        )
+
+    @staticmethod
+    def _provider_failure_requires_ocr(file_result: dict[str, Any]) -> bool:
+        status = str(file_result.get("metadata_lookup_status") or "")
+        if status in {
+            MetadataLookupStatus.NOT_FOUND.value,
+            MetadataLookupStatus.AMBIGUOUS.value,
+            MetadataLookupStatus.UNAVAILABLE.value,
+            MetadataLookupStatus.FAILED.value,
+        }:
+            return True
+        durable_reason = normalized_text(file_result.get("durable_identity_reason"))
+        return "incomplete" in durable_reason or "record incomplete" in durable_reason
+
+    @staticmethod
     def _same_source(source: Path, inspection: PdfInspection) -> bool:
         try:
             stat = source.stat()
@@ -1609,10 +1632,19 @@ class ProgressiveInboxRegisterWorkflow:
 
     @staticmethod
     def _is_provisional(record: CatalogueRecord | None) -> bool:
-        return bool(record and str(record.get("id") or "").upper().startswith("LOCAL:"))
+        if record is None:
+            return False
+        if normalized_text(record.get("source")) == "local_pdf":
+            return True
+        return any(
+            line.lstrip().upper().startswith("NEEDS_REVIEW:")
+            and "field=paper_identity" in normalized_text(line)
+            for line in str(record.get("uncertainty") or "").splitlines()
+        )
 
     def _existing_local_record(
         self,
+        catalogue: CatalogueService,
         records: list[CatalogueRecord],
         relative: str,
         filename: str,
@@ -1620,15 +1652,22 @@ class ProgressiveInboxRegisterWorkflow:
     ) -> CatalogueRecord | None:
         path_key = normalized_relative_path(relative)
         filename_key = normalized_text(filename)
+        row_by_uuid = {
+            normalized_text(row.get("paper_uuid")): row for row in records
+        }
         by_path = [
-            row for row in records
-            if normalized_relative_path(row.get("pdf_relative_path")) == path_key
+            row_by_uuid[normalized_text(document.get("paper_uuid"))]
+            for document in catalogue.documents
+            if normalized_text(document.get("paper_uuid")) in row_by_uuid
+            and normalized_relative_path(document.get("relative_path")) == path_key
         ]
         if len(by_path) == 1:
             return by_path[0]
         by_name = [
-            row for row in records
-            if normalized_text(row.get("pdf_filename")) == filename_key
+            row_by_uuid[normalized_text(document.get("paper_uuid"))]
+            for document in catalogue.documents
+            if normalized_text(document.get("paper_uuid")) in row_by_uuid
+            and normalized_text(document.get("filename")) == filename_key
         ]
         if len(by_name) == 1:
             return by_name[0]
@@ -1652,10 +1691,21 @@ class ProgressiveInboxRegisterWorkflow:
         ]
         if len(identities) != 1:
             return None
+        saved_paper_uuid = normalized_text(identities[0].get("paper_uuid"))
+        if saved_paper_uuid:
+            saved = [
+                row
+                for row in records
+                if normalized_text(row.get("paper_uuid")) == saved_paper_uuid
+            ]
+            if len(saved) == 1:
+                return saved[0]
         previous_path = normalized_relative_path(identities[0].get("source_path"))
         matched = [
-            row for row in records
-            if normalized_relative_path(row.get("pdf_relative_path")) == previous_path
+            row_by_uuid[normalized_text(document.get("paper_uuid"))]
+            for document in catalogue.documents
+            if normalized_text(document.get("paper_uuid")) in row_by_uuid
+            and normalized_relative_path(document.get("relative_path")) == previous_path
         ]
         return matched[0] if len(matched) == 1 else None
 
@@ -1699,12 +1749,12 @@ class ProgressiveInboxRegisterWorkflow:
         filename_candidate = self._candidate_dict(evidence.title_candidate)
         return {
             "source_path": relative,
-            "catalogue_id": None,
+            "paper_uuid": None,
             "result_status": InboxItemStatus.BLOCKED.value,
             "inspection_status": "filename_only",
             "inspection_level_used": InspectionLevel.SKIP.value,
             "match_status": MatchStatus.NOT_FOUND.value,
-            "matched_catalogue_id": None,
+            "matched_paper_uuid": None,
             "match_method": "none",
             "target_filename": None,
             "target_path": None,
@@ -1750,7 +1800,7 @@ class ProgressiveInboxRegisterWorkflow:
     @staticmethod
     def _set_match_report(file_result: dict[str, Any], match) -> None:
         file_result["match_status"] = match.status.value
-        file_result["matched_catalogue_id"] = match.matched_catalogue_id
+        file_result["matched_paper_uuid"] = match.matched_paper_uuid
         file_result["match_method"] = match.method
         file_result["match_evidence"] = {
             "confidence": match.confidence,
@@ -1902,7 +1952,6 @@ class ProgressiveInboxRegisterWorkflow:
             operations.append(
                 {
                     **operation.to_dict(),
-                    "record_uid": item["record"].get("record_uid"),
                     "paper_uuid": paper_uuid,
                     "document_id": document_id,
                     "operation_id": document_id or f"catalogue-row:{item['record'].row_number}",

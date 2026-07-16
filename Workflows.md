@@ -26,17 +26,17 @@ Workflow 4: file by topic_folder
    Topics/<topic_folder>/
 ```
 
-Since 0.5.1, `Catalogue` is the paper table and `Documents` is the physical
+Since 0.5.2, `Catalogue` is the paper table and `Documents` is the physical
 file table. Every paper has an immutable `paper_uuid`; every file has a stable
 `document_id`. Main and supplementary PDF/XLSX/XLS/CSV files share the same
-paper UUID. The legacy `pdf_*` Catalogue columns are read-only compatibility
-fields and are no longer the file-state source of truth after migration.
+paper UUID. `paper_uuid` is the sole internal paper key; file names, locations,
+hashes, and lifecycle state exist only in `Documents`.
 
 Upgrade an existing workbook with:
 
 ```powershell
-lam migrate-documents --root D:\ResearchLibrary --dry-run
-lam migrate-documents --root D:\ResearchLibrary --apply
+lam migrate-identifiers --root D:\ResearchLibrary --dry-run
+lam migrate-identifiers --root D:\ResearchLibrary --apply
 ```
 
 Modifying commands run Catalogue preflight before network/PDF/OCR work and
@@ -78,9 +78,8 @@ Interpretation:
   not contain a leading `Topics/`, an absolute path, `..`, hidden components,
   or reserved directory names. Limited nesting is allowed.
 
-Legacy `pdf_filename`, `pdf_relative_path`, and `pdf_status` fields may remain
-read-only during the compatibility release. After migration, workflows must
-not use them as the source of current file state.
+Older `id`, `record_uid`, and `pdf_*` columns are accepted only by the explicit
+identifier migration. Ordinary workflows require the strict 0.5.2 schema.
 
 ---
 
@@ -90,14 +89,12 @@ not use them as the source of current file state.
 
 ```text
 paper_uuid
+uncertainty
 title
 authors
 year
 journal
 journal_abbrev
-doi
-pmid
-arxiv_id
 publication_type
 abstract
 keywords
@@ -106,10 +103,12 @@ auto_tags
 suggested_topic
 topic_folder
 source
-notes
-uncertainty
 date_added
 date_updated
+notes
+doi
+pmid
+arxiv_id
 ```
 
 `Documents` contains exactly one row per managed physical file:
@@ -117,6 +116,7 @@ date_updated
 ```text
 document_id
 paper_uuid
+uncertainty
 document_type
 supplementary_type
 sequence
@@ -126,7 +126,6 @@ extension
 sha256
 file_status
 source
-uncertainty
 date_added
 date_updated
 ```
@@ -135,8 +134,13 @@ date_updated
 are external identifiers only. A paper has at most one `main` document and may
 have multiple `supplementary` documents. `document_id` is stable and unique.
 
-Existing legacy columns may remain for one read-only compatibility release,
-but new file state is written only to `Documents`.
+Legacy columns are accepted only while `migrate-identifiers` plans or applies
+the upgrade. Apply validates or recovers each UUID, reconciles old PDF fields
+against Documents and the observed filesystem, validates every foreign key,
+then removes all non-schema columns only after the checks succeed. A
+`record_uid`/`paper_uuid` disagreement blocks the whole migration. Dry-run does
+not modify the workbook; apply creates a backup, saves atomically, journals the
+operation, and runs Workflow 1 once in final-check mode.
 
 Duplicate paper detection order is:
 
@@ -236,11 +240,11 @@ Use this mode when either required snapshot does not exist.
 
 1. Read `catalogue.xlsx`.
 2. Scan only `Inbox/*.pdf`, `Registered/*.pdf`, and `Topics/**/*.pdf`.
-3. Match catalogue rows to observed PDFs using identifiers, filename, and path information.
-4. Update only objectively determinable fields such as:
-   - `pdf_status`;
-   - `pdf_filename`;
-   - `pdf_relative_path`;
+3. Match Catalogue rows to observed files through `Documents.paper_uuid`.
+4. Update only objectively determinable Documents fields such as:
+   - `file_status`;
+   - `filename`;
+   - `relative_path`;
    - `date_updated`.
 5. Record unresolved mismatches in `uncertainty`.
 6. Report unmatched catalogue rows and unmatched files.
@@ -264,7 +268,7 @@ Use this mode when both snapshots exist.
    - catalogue field changes;
    - mismatches between `topic_folder` and observed location.
 4. Write the complete machine-readable result to `last_diff.json`.
-5. Update objective catalogue location and status fields where the result is unambiguous.
+5. Update objective Documents location and status fields where the result is unambiguous.
 6. Add or update `NEEDS_REVIEW:` entries for unresolved discrepancies.
 7. Refresh the accepted snapshots after successful completion.
 
@@ -313,22 +317,22 @@ When Workflow 1 is running as the automatic final check:
 
 Examples:
 
-- Catalogue row expects a PDF but none exists:
-  - set `pdf_status = missing`;
+- Documents row expects a file but none exists:
+  - set `file_status = missing`;
   - preserve intended `topic_folder`;
   - add `NEEDS_REVIEW:` if the absence is unexplained.
 
-- PDF exists in `Registered/`:
-  - set `pdf_status = registered`;
-  - update `pdf_relative_path`.
+- Document exists in `Registered/`:
+  - set `file_status = registered`;
+  - update `relative_path`.
 
-- PDF exists in its confirmed topic folder:
-  - set `pdf_status = filed`;
-  - update `pdf_relative_path`.
+- Document exists in its confirmed topic folder:
+  - set `file_status = filed`;
+  - update `relative_path`.
 
-- PDF exists in a different location than `topic_folder`:
+- Document exists in a different location than `topic_folder`:
   - preserve `topic_folder`;
-  - record observed `pdf_relative_path`;
+  - record observed Documents `relative_path`;
   - report the discrepancy;
   - do not move it unless Workflow 4 is authorized.
 
@@ -439,7 +443,7 @@ Rules:
 2. Do not overwrite `manual_tags`, `topic_folder`, `notes`, or user confirmations.
 3. Do not silently overwrite non-empty bibliographic fields.
 4. Record material conflicts in `uncertainty`.
-5. Set `pdf_status = not_downloaded` only when no local PDF is known.
+5. Create or update a Documents row only when a local file is actually known.
 6. Do not assign a final `topic_folder` unless the user has already supplied it.
 7. Add new rows at the bottom.
 
@@ -552,10 +556,9 @@ Run only when explicitly requested by the user.
 A request to run Workflow 3 authorizes routine high-confidence renaming and movement from `Inbox/` to `Registered/`.
 
 The implementation processes only direct, non-hidden `.pdf` children of
-`Inbox/`. Existing provisional rows are retried by preferring user-confirmed
-identity, catalogue identifiers, PDF identifiers, catalogue title evidence,
-and only then filename and progressively more expensive PDF evidence. Bounded
-`pypdf` inspection and OCR remain fallbacks. Provider, catalogue, PDF, and user
+`Inbox/`. It gathers filename and bounded `pypdf` evidence before Workflow 2,
+then re-evaluates local completeness after an unsuccessful provider result and
+may OCR page 1. Provider, catalogue, PDF, OCR, and user
 confirmation evidence are merged before the durable identity decision;
 identifier conflicts remain hard blockers. Every processed unresolved PDF
 receives a stable provisional catalogue row and remains in `Inbox/`.
@@ -563,8 +566,12 @@ receives a stable provisional catalogue row and remains in `Inbox/`.
 ### First-page OCR fallback
 
 Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. In
-`--ocr auto` mode it renders and recognizes only page 1 when that evidence is
-empty, too short, abnormal, or lacks identification candidates. `--ocr never`
+`--ocr auto` mode it initially renders page 1 only when that evidence is empty,
+too short, abnormal, or lacks identification candidates. After Workflow 2
+returns `not_found`, `ambiguous`, an incomplete record, or provider failure, it
+reconsiders OCR when authors, journal, abstract, or a usable English title are
+still absent. An existing DOI or title does not suppress this second gate. The
+report reason is `provider_not_found_local_metadata_incomplete`. `--ocr never`
 disables OCR, while `--ocr always` performs one first-page pass for comparison.
 `--skip-pdf-text` and `--filename-only` disable all page-content extraction,
 including OCR.
@@ -583,6 +590,11 @@ conflicting embedded-text/OCR evidence cannot authorize a move. OCR-derived
 identifiers with unique confirmation may proceed through the existing local
 match or Workflow 2 verification. Successful files still move only from
 `Inbox/` to `Registered/`; Workflow 4 is unchanged.
+
+Repeated pypdf font-dictionary diagnostics such as duplicate `/Ascent`
+definitions are collapsed into one `pypdf_font_dictionary_warning`. They are
+non-blocking parser warnings: successful text extraction keeps the PDF
+readable and Workflow 3 continues normally.
 
 OCR cache keys include the file fingerprint, page, engine/version, languages,
 DPI, preprocessing, and configuration version. Dry runs may read this cache but
@@ -608,36 +620,32 @@ warnings, and selected evidence—not the full recognized page text.
 
 For each candidate file:
 
-1. Find an existing catalogue or `LOCAL:` provisional row by path and filename.
-2. Parse relevant `USER_CONFIRMED` identity instructions and existing catalogue
-   PMID, DOI, arXiv ID, title, authors, year, and journal evidence.
-3. Extract DOI, PMID, arXiv ID, title, year, and journal clues from the filename.
-4. Query Workflow 2 in this order: confirmed identity, catalogue PMID,
-   catalogue DOI, catalogue arXiv ID, PDF identifiers, supported catalogue
-   title, filename, embedded PDF evidence, then OCR evidence.
-5. Stop content extraction when merged evidence confirms a unique durable
-   identity; a provider record alone is not treated as the only authority.
-6. Otherwise inspect PDF metadata and bounded page text with `pypdf`.
-7. Repeat local matching or Workflow 2 lookup with the additional evidence.
-8. Only when that evidence remains insufficient, OCR page 1 and retry matching.
-9. If provider lookup is unavailable, fails, or finds nothing, conservatively
-   parse first-page local metadata and fill only blank identification fields.
+1. Reconnect an existing provisional row by `paper_uuid` and the saved Inbox
+   fingerprint, or match a confirmed row through Documents and identifiers.
+2. Parse relevant `USER_CONFIRMED` instructions and filename evidence.
+3. Inspect PDF metadata and bounded first-page text with `pypdf`.
+4. Filter title candidates by section, position, and title quality.
+5. Query Workflow 2 with identifiers, English/local titles, authors, year, and journal.
+6. After an unsuccessful or incomplete provider result, re-evaluate local fields.
+7. OCR page 1 when the second gate finds important local fields missing.
+8. Merge all pypdf/OCR local evidence before creating a new provisional row.
+9. Fill only reliable blank local fields and preserve provenance/confidence.
 10. Confirm that the combined PDF-paper evidence meets the high-confidence threshold.
-11. Canonicalize `record_uid`, user-facing `id`, provider metadata, PubMed
-    journal fields, publication type, and the single primary `source`.
+11. Preserve `paper_uuid` and canonicalize provider metadata, PubMed journal
+    fields, publication type, and the single primary `source`.
 12. Generate a safe standard filename.
-13. Update:
-   - `pdf_status`;
-   - `pdf_filename`;
-   - `pdf_relative_path`;
+13. Update Documents:
+   - `file_status`;
+   - `filename`;
+   - `relative_path`;
    - relevant missing metadata;
    - `date_updated`;
    - `uncertainty`, when needed.
 14. Rename the file.
 15. Move it to `Registered/`.
-16. If identity remains unconfirmed, create or update one stable `LOCAL:` row,
-    set its observed Inbox path/status, add one paper-identity blocker, and leave
-    the PDF in `Inbox/`.
+16. If identity remains unconfirmed, create or update one stable provisional
+    `paper_uuid` row, add one paper-identity blocker, create no Documents row,
+    and leave the PDF unchanged in `Inbox/`.
 
 Before applying ready operations, write a recoverable journal under
 `.library_state/runs/<run_id>/operation_journal.json`. Update it through
@@ -676,10 +684,12 @@ For unresolved files:
 - continue processing other eligible files.
 
 Local first-page metadata fallback may fill blank `title`, `authors`, `year`,
-`journal`, `doi`, `pmid`, and `publication_type` values only. It must preserve
-all populated cells and user-controlled content, record its use in `source` or
-`uncertainty`, and must not manufacture catalogue `abstract` or `keywords`
-values. Common short/full journal-name variants, including a base journal name
+`journal`, `doi`, and `abstract` values. Abstracts require an explicit
+`Abstract` or `摘要` section, a recognized ending boundary, and a reasonable
+bounded length; English is preferred and Chinese is allowed as fallback. It
+must preserve populated cells and user-controlled content, keep
+`source = local_pdf`, retain `metadata_identity_unconfirmed`, and record field
+source/confidence in `uncertainty`. Common short/full journal-name variants, including a base journal name
 with an indexed parenthetical qualifier, are compatible evidence and receive a
 machine note rather than a review blocker.
 
@@ -808,9 +818,8 @@ lam normalize-records --dry-run
 lam normalize-records
 ```
 
-This migration assigns missing immutable `record_uid` values to all Catalogue
-rows, then uses existing PMID, DOI, or arXiv identifiers for exact provider
-queries. Accepted records receive canonical IDs, canonical primary `source`,
+This maintenance workflow uses existing PMID, DOI, or arXiv identifiers for
+exact provider queries. Accepted records retain `paper_uuid` and receive a canonical primary `source`,
 provider title/author/year fields where safe, and correct journal title and
 abbreviation placement. It preserves user-controlled fields, every
 `USER_CONFIRMED` line, and arbitrary user text.
@@ -882,8 +891,8 @@ Apply mode:
 4. refuses different-content target collisions and revalidates source
    size/mtime immediately before each no-overwrite rename;
 5. leaves topic-folder PDFs in place and reports any proposed name;
-6. updates `publication_type`, `pdf_filename`, `pdf_relative_path`, and
-   `date_updated` while preserving all user-controlled fields;
+6. updates Catalogue `publication_type` and the linked Documents `filename`,
+   `relative_path`, and `date_updated` while preserving user-controlled fields;
 7. backs up `catalogue.xlsx`, writes a recoverable operation journal and change
    log entry, and runs Workflow 1 exactly once in final-check mode.
 
@@ -913,8 +922,8 @@ A request to run Workflow 4 authorizes routine high-confidence file movements ba
 
 ## Purpose
 
-1. Compare intended `topic_folder` values with observed `pdf_relative_path` values.
-2. Move eligible PDFs from `Registered/` or an existing path below `Topics/`
+1. Compare intended `topic_folder` values with observed Documents `relative_path` values.
+2. Move eligible Documents from `Registered/` or an existing path below `Topics/`
    into `Topics/<topic_folder>/`.
 3. Update location and lifecycle fields.
 4. Leave unresolved or unclassified files in place.
@@ -923,9 +932,9 @@ A request to run Workflow 4 authorizes routine high-confidence file movements ba
 Workflow 4 handles location only.
 
 Workflow 4 must never move files from `Inbox/`. Files in `Inbox/` remain under
-Workflow 2/3 authority. It accepts only catalogue-registered direct PDF children
-of `Registered/` or visible PDF descendants of `Topics/`. It rejects legacy
-root-level topic locations, hidden and management directories, non-PDF files,
+Workflow 2/3 authority. It accepts only Catalogue-linked supported Documents in
+`Registered/` or visible descendants of `Topics/`. It rejects legacy
+root-level topic locations, hidden and management directories, unsupported files,
 and paths outside the library root. Legacy locations are reported with
 `legacy_topic_location` and must be handled by `migrate-topics`.
 
@@ -934,7 +943,7 @@ It must not:
 - query PubMed or arXiv;
 - complete bibliographic metadata;
 - read PDF content or repeat paper identification;
-- regenerate or change the approved `pdf_filename`;
+- regenerate or change the approved Documents `filename`;
 - inspect or modify `summary.md`;
 - infer final folders from `auto_tags` or `suggested_topic`.
 
@@ -960,18 +969,18 @@ A `USER_CONFIRMED:` entry may explain or preserve a user's decision, but the act
 
 ## Filing rules
 
-For each local PDF with a matched catalogue row:
+For each local Document linked to a Catalogue row:
 
 1. read `topic_folder`;
-2. read the observed `pdf_relative_path`;
+2. read the observed Documents `relative_path`;
 3. determine whether movement is needed;
 4. verify that the target path is safe;
 5. verify that no different-content filename collision exists;
 6. move the file without changing its name;
-7. update:
-   - `pdf_status = filed`;
-   - `pdf_filename`;
-   - `pdf_relative_path`;
+7. update Documents:
+   - `file_status = filed`;
+   - `filename`;
+   - `relative_path`;
    - `date_updated`;
 8. append the operation to `library_changes.md`.
 
@@ -1081,8 +1090,8 @@ management directories, plus names configured through
 `RESERVED_ROOT_DIRECTORIES`.
 
 An ordinary root directory is a legacy topic candidate only when Catalogue
-`topic_folder`/`pdf_relative_path` references it, it contains a PDF registered
-by Catalogue, or the user explicitly supplies `--include-topic`. A directory
+`topic_folder` or a Documents `relative_path` references it, it contains a file
+registered by Documents, or the user explicitly supplies `--include-topic`. A directory
 that merely contains a PDF is not sufficient. Unknown directories are reported
 without movement.
 
@@ -1096,7 +1105,7 @@ the no-overwrite directory move.
 
 If the target exists and is empty, it may be replaced by the directory entry.
 If it contains anything, block the candidate without merging or overwriting.
-Update legacy `pdf_relative_path` values with the leading `Topics/`; keep a
+Update Documents `relative_path` values with the leading `Topics/`; keep a
 relative `topic_folder` unchanged and normalize only the historical equivalent
 `Topics/<topic>` form.
 

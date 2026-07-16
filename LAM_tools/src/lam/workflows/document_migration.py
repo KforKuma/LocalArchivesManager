@@ -28,7 +28,9 @@ class DocumentMigrationWorkflow:
             dry_run=dry_run,
             mode="dry_run" if dry_run else "apply",
         )
-        catalogue = CatalogueService(self.settings.catalogue_path)
+        catalogue = CatalogueService(
+            self.settings.catalogue_path, allow_legacy_schema=True
+        )
         records = catalogue.load()
         if catalogue.has_documents_sheet:
             incomplete = [

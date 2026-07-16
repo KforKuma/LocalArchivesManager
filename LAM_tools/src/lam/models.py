@@ -301,7 +301,7 @@ class PdfInspection:
 class MatchResult:
     status: MatchStatus
     matched_row_id: int | None = None
-    matched_catalogue_id: str | None = None
+    matched_paper_uuid: str | None = None
     confidence: str = "insufficient"
     method: str = "none"
     candidate_rows: list[int] = field(default_factory=list)
@@ -320,7 +320,7 @@ class MetadataLookupRequest:
     authors: str | None = None
     year: str | None = None
     journal: str | None = None
-    catalogue_id: str | None = None
+    paper_uuid: str | None = None
     user_confirmed_identity: bool = False
     source_pdf: str | None = None
     provider: str = "auto"
@@ -470,6 +470,7 @@ class MetadataRecord:
             "journal_abbrev": self.journal_abbrev,
             "doi": self.doi,
             "pmid": self.pmid,
+            "arxiv_id": self.arxiv_id,
             "publication_type": publication,
             "abstract": self.abstract,
             "keywords": "; ".join(keywords),

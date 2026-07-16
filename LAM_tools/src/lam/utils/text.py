@@ -23,6 +23,24 @@ SUPPLEMENT_SIGNALS = re.compile(
     re.I,
 )
 
+TITLE_LAYOUT_NOISE = re.compile(
+    r"^(?:vol(?:ume)?\.?\s*\d+.*|no\.?\s*\d+.*|第\s*\d+\s*卷.*|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}.*|"
+    r"\d+\s*[-–—]\s*\d+|p(?:p)?\.?\s*\d+.*|issn\b.*|doi\b.*|"
+    r"https?://.*|www\..*|abstract|摘\s*要|keywords?|关\s*键\s*词)$",
+    re.I,
+)
+
+
+def is_title_noise_line(value: object) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    header_geometry = re.search(
+        r"(?:\bv\s*ol(?:ume)?\s*\.?\s*\d+|\bn\s*o\s*\.?\s*\d+|第\s*\d+\s*卷)",
+        text,
+        re.I,
+    )
+    return bool(not text or TITLE_LAYOUT_NOISE.match(text) or header_geometry)
+
 
 def normalize_title(value: object) -> str:
     text = html.unescape(str(value or ""))
@@ -57,40 +75,38 @@ def title_candidates_from_page(
     lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines()]
     lines = [line for line in lines if line]
     candidates: list[TitleCandidate] = []
-    buffer: list[str] = []
     for line in lines[:25]:
         low = line.casefold()
         if (
-            "doi" in low
+            is_title_noise_line(line)
             or "copyright" in low
             or re.fullmatch(r"(?:research )?article|review|editorial", low)
-            or re.search(r"\b(?:vol(?:ume)?|issue)\b", low)
         ):
-            if buffer:
-                break
             continue
+        if re.fullmatch(r"(?:abstract|摘\s*要|keywords?|关\s*键\s*词)\s*[:：]?", line, re.I):
+            break
         if re.search(r"\b(?:university|department|correspondence|@)\b", low):
             break
         if len(line) <= 3:
             continue
-        buffer.append(line)
-        joined = " ".join(buffer)
-        if min_length <= len(joined) <= max_length:
+        cjk_count = len(re.findall(r"[\u3400-\u9fff]", line))
+        word_count = len(re.findall(r"[A-Za-z][A-Za-z'-]*", line))
+        if cjk_count < 4 and word_count < 4:
+            continue
+        if min_length <= len(line) <= max_length:
             candidates.append(
                 TitleCandidate(
-                    value=joined,
-                    confidence="high" if page == 1 and len(joined) >= 20 else "medium",
+                    value=line,
+                    confidence="high" if page == 1 and (len(line) >= 20 or cjk_count >= 8) else "medium",
                     source_type="page_top",
                     page=page,
                     evidence=f"page_{page}_top_lines",
                 )
             )
-        if len(joined) >= max_length:
-            break
     unique: dict[str, TitleCandidate] = {}
     for candidate in candidates:
         unique.setdefault(normalize_title(candidate.value), candidate)
-    return list(unique.values())[-5:]
+    return list(unique.values())[:5]
 
 
 def is_probable_supplement(*values: object) -> bool:

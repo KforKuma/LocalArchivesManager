@@ -53,7 +53,7 @@ class TopicMigrationWorkflow:
             self.settings.max_filename_length,
             self.settings.reserved_root_directories,
         )
-        references = self._legacy_references(records)
+        references = self._legacy_references(catalogue, records)
         explicit = self._validate_explicit(include_topics)
         moves: list[TopicDirectoryMove] = []
         recover_roots: set[str] = set()
@@ -63,7 +63,9 @@ class TopicMigrationWorkflow:
             for path in self.settings.library_root.iterdir()
             if path.is_dir()
         }
-        self._add_registered_pdf_references(records, root_directories, references)
+        self._add_registered_pdf_references(
+            catalogue, records, root_directories, references
+        )
         referenced_roots = set(references) | explicit
         for name, path in sorted(root_directories.items(), key=lambda item: item[0].casefold()):
             kind = self.policy.classify_root_directory(
@@ -93,7 +95,9 @@ class TopicMigrationWorkflow:
             row_numbers = tuple(
                 sorted(record.row_number for record in references.get(name, []))
             )
-            pdf_moves = tuple(self._pdf_movements(path, target, references.get(name, [])))
+            pdf_moves = tuple(
+                self._pdf_movements(catalogue, path, target, references.get(name, []))
+            )
             moves.append(
                 TopicDirectoryMove(
                     name,
@@ -195,8 +199,11 @@ class TopicMigrationWorkflow:
             journal.set_operation_state(-1, "catalogue_committed")
 
         result.changed_files = sum(len(move.pdf_moves) for move in moved)
-        result.changed_rows = len({change.row_number for change in catalogue.changes})
-        if moved or catalogue.changes:
+        result.changed_rows = len(
+            {("Catalogue", change.row_number) for change in catalogue.changes}
+            | {("Documents", change.row_number) for change in catalogue.document_changes}
+        )
+        if moved or catalogue.changes or catalogue.document_changes:
             append_change_log(
                 self.settings.changes_log_path,
                 workflow="Topic migration",
@@ -241,16 +248,19 @@ class TopicMigrationWorkflow:
                     f"Registered migration source changed after planning: {path}"
                 )
 
-    def _legacy_references(self, records: list[Any]) -> dict[str, list[Any]]:
+    def _legacy_references(
+        self, catalogue: CatalogueService, records: list[Any]
+    ) -> dict[str, list[Any]]:
         references: dict[str, list[Any]] = {}
         for record in records:
-            relative = str(record.get("pdf_relative_path") or "").strip().replace("\\", "/")
-            if relative and not relative.casefold().startswith(
-                ("inbox/", "registered/", "topics/")
-            ):
-                root = relative.split("/", 1)[0]
-                if self.policy.classify_root_directory(root) == RootDirectoryKind.UNKNOWN:
-                    references.setdefault(root, []).append(record)
+            for document in catalogue.documents_for_paper(record.get("paper_uuid")):
+                relative = str(document.get("relative_path") or "").strip().replace("\\", "/")
+                if relative and not relative.casefold().startswith(
+                    ("inbox/", "registered/", "topics/")
+                ):
+                    root = relative.split("/", 1)[0]
+                    if self.policy.classify_root_directory(root) == RootDirectoryKind.UNKNOWN:
+                        references.setdefault(root, []).append(record)
             topic = str(record.get("topic_folder") or "").strip().replace("\\", "/")
             if topic.casefold().startswith("topics/"):
                 topic = topic.split("/", 1)[1]
@@ -264,15 +274,17 @@ class TopicMigrationWorkflow:
 
     def _add_registered_pdf_references(
         self,
+        catalogue: CatalogueService,
         records: list[Any],
         root_directories: dict[str, Path],
         references: dict[str, list[Any]],
     ) -> None:
         filenames: dict[str, list[Any]] = {}
         for record in records:
-            filename = str(record.get("pdf_filename") or "").strip()
-            if filename:
-                filenames.setdefault(filename.casefold(), []).append(record)
+            for document in catalogue.documents_for_paper(record.get("paper_uuid")):
+                filename = str(document.get("filename") or "").strip()
+                if filename:
+                    filenames.setdefault(filename.casefold(), []).append(record)
         for name, directory in root_directories.items():
             if self.policy.classify_root_directory(name) != RootDirectoryKind.UNKNOWN:
                 continue
@@ -303,42 +315,49 @@ class TopicMigrationWorkflow:
         return names
 
     def _pdf_movements(
-        self, source: Path, target: Path, records: list[Any]
+        self,
+        catalogue: CatalogueService,
+        source: Path,
+        target: Path,
+        records: list[Any],
     ) -> list[dict[str, Any]]:
         movements: list[dict[str, Any]] = []
         for record in records:
-            relative = str(record.get("pdf_relative_path") or "").strip().replace("\\", "/")
-            old_path: Path | None = None
-            if relative and relative.split("/", 1)[0].casefold() == source.name.casefold():
-                old_path = self.settings.library_root / Path(*relative.split("/"))
-            else:
-                filename = str(record.get("pdf_filename") or "").strip()
-                candidates = (
-                    [path for path in source.rglob(filename) if path.is_file()]
-                    if filename
-                    else []
+            for document in catalogue.documents_for_paper(record.get("paper_uuid")):
+                relative = str(document.get("relative_path") or "").strip().replace("\\", "/")
+                old_path: Path | None = None
+                if relative and relative.split("/", 1)[0].casefold() == source.name.casefold():
+                    old_path = self.settings.library_root / Path(*relative.split("/"))
+                else:
+                    filename = str(document.get("filename") or "").strip()
+                    candidates = (
+                        [path for path in source.rglob(filename) if path.is_file()]
+                        if filename
+                        else []
+                    )
+                    if len(candidates) == 1:
+                        old_path = candidates[0]
+                if old_path is None:
+                    continue
+                if not old_path.is_file():
+                    continue
+                suffix = old_path.relative_to(source)
+                stat = old_path.stat()
+                movements.append(
+                    {
+                        "operation_type": "move",
+                        "source": str(old_path),
+                        "target": str(target / suffix),
+                        "catalogue_row": record.row_number,
+                        "document_row": document.row_number,
+                        "document_id": document.get("document_id"),
+                        "reason": "migrate legacy topic namespace",
+                        "expected_size": stat.st_size,
+                        "expected_mtime_ns": stat.st_mtime_ns,
+                        "expected_quick_hash": quick_hash(old_path),
+                        "execution_state": "planned",
+                    }
                 )
-                if len(candidates) == 1:
-                    old_path = candidates[0]
-            if old_path is None:
-                continue
-            if not old_path.is_file() or old_path.suffix.casefold() != ".pdf":
-                continue
-            suffix = old_path.relative_to(source)
-            stat = old_path.stat()
-            movements.append(
-                {
-                    "operation_type": "move",
-                    "source": str(old_path),
-                    "target": str(target / suffix),
-                    "catalogue_row": record.row_number,
-                    "reason": "migrate legacy topic namespace",
-                    "expected_size": stat.st_size,
-                    "expected_mtime_ns": stat.st_mtime_ns,
-                    "expected_quick_hash": quick_hash(old_path),
-                    "execution_state": "planned",
-                }
-            )
         return movements
 
     def _plan_catalogue_updates(
@@ -350,7 +369,7 @@ class TopicMigrationWorkflow:
     ) -> list[dict[str, Any]]:
         updates: list[dict[str, Any]] = []
         discovered_paths = {
-            int(item["catalogue_row"]): Path(str(item["target"]))
+            int(item["document_row"]): Path(str(item["target"]))
             .relative_to(self.settings.library_root)
             .as_posix()
             for move in moves
@@ -358,30 +377,33 @@ class TopicMigrationWorkflow:
         }
         for record in records:
             topic = str(record.get("topic_folder") or "").strip().replace("\\", "/")
-            relative = str(record.get("pdf_relative_path") or "").strip().replace("\\", "/")
             if topic.casefold().startswith("topics/"):
                 normalized = self.policy.normalize_legacy_topic_folder(topic)
                 updates.append(
                     {"row": record.row_number, "field": "topic_folder", "new": normalized}
                 )
-            if record.row_number in discovered_paths and relative != discovered_paths[record.row_number]:
-                updates.append(
-                    {
-                        "row": record.row_number,
-                        "field": "pdf_relative_path",
-                        "new": discovered_paths[record.row_number],
-                    }
-                )
-            elif relative and not relative.casefold().startswith("topics/"):
-                root = relative.split("/", 1)[0]
-                if root in ready_roots:
+            for document in catalogue.documents_for_paper(record.get("paper_uuid")):
+                relative = str(document.get("relative_path") or "").strip().replace("\\", "/")
+                if document.row_number in discovered_paths and relative != discovered_paths[document.row_number]:
                     updates.append(
                         {
-                            "row": record.row_number,
-                            "field": "pdf_relative_path",
-                            "new": f"Topics/{relative}",
+                            "sheet": "Documents",
+                            "row": document.row_number,
+                            "field": "relative_path",
+                            "new": discovered_paths[document.row_number],
                         }
                     )
+                elif relative and not relative.casefold().startswith("topics/"):
+                    root = relative.split("/", 1)[0]
+                    if root in ready_roots:
+                        updates.append(
+                            {
+                                "sheet": "Documents",
+                                "row": document.row_number,
+                                "field": "relative_path",
+                                "new": f"Topics/{relative}",
+                            }
+                        )
         return updates
 
     def _apply_catalogue_updates(
@@ -393,7 +415,7 @@ class TopicMigrationWorkflow:
     ) -> None:
         today = date.today().isoformat()
         discovered_paths = {
-            int(item["catalogue_row"]): Path(str(item["target"]))
+            int(item["document_row"]): Path(str(item["target"]))
             .relative_to(self.settings.library_root)
             .as_posix()
             for move in moves
@@ -405,23 +427,26 @@ class TopicMigrationWorkflow:
                 catalogue.normalize_topic_folder_for_migration(
                     record, self.policy.normalize_legacy_topic_folder(topic)
                 )
-            relative = str(record.get("pdf_relative_path") or "").strip().replace("\\", "/")
-            if record.row_number in discovered_paths:
-                updates: dict[str, Any] = {
-                    "pdf_relative_path": discovered_paths[record.row_number]
-                }
-                if "date_updated" in catalogue.headers:
-                    updates["date_updated"] = today
-                catalogue.update_fields(record, updates)
-            elif relative and not relative.casefold().startswith("topics/"):
-                root = relative.split("/", 1)[0]
-                if root in ready_roots:
-                    updates: dict[str, Any] = {
-                        "pdf_relative_path": f"Topics/{relative}"
-                    }
-                    if "date_updated" in catalogue.headers:
-                        updates["date_updated"] = today
-                    catalogue.update_fields(record, updates)
+            for document in catalogue.documents_for_paper(record.get("paper_uuid")):
+                relative = str(document.get("relative_path") or "").strip().replace("\\", "/")
+                if document.row_number in discovered_paths:
+                    catalogue.update_document_fields(
+                        document,
+                        {
+                            "relative_path": discovered_paths[document.row_number],
+                            "date_updated": today,
+                        },
+                    )
+                elif relative and not relative.casefold().startswith("topics/"):
+                    root = relative.split("/", 1)[0]
+                    if root in ready_roots:
+                        catalogue.update_document_fields(
+                            document,
+                            {
+                                "relative_path": f"Topics/{relative}",
+                                "date_updated": today,
+                            },
+                        )
 
     def _create_journal(
         self,

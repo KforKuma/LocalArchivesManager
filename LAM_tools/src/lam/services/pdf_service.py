@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from dataclasses import asdict
 from dataclasses import replace
@@ -36,6 +37,7 @@ class PdfService:
         ocr_languages: tuple[str, ...] | None = None,
         ocr_dpi: int | None = None,
         ocr_gpu: str | None = None,
+        ocr_trigger_reason: str | None = None,
         run_id: str | None = None,
         ocr_cache_write: bool = True,
     ) -> PdfInspection:
@@ -53,6 +55,7 @@ class PdfService:
             ocr_languages,
             ocr_dpi,
             ocr_gpu,
+            ocr_trigger_reason,
             ocr_cache_write,
         )
         if self.settings.inspection_cache_enabled and key in self._cache:
@@ -66,6 +69,12 @@ class PdfService:
             size=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
         )
+        parser_warnings: list[str] = []
+        handler = _PypdfWarningHandler(parser_warnings)
+        pypdf_logger = logging.getLogger("pypdf")
+        previous_propagate = pypdf_logger.propagate
+        pypdf_logger.propagate = False
+        pypdf_logger.addHandler(handler)
         try:
             reader = PdfReader(resolved, strict=False)
             result.is_encrypted = bool(reader.is_encrypted)
@@ -177,7 +186,9 @@ class PdfService:
                 "pypdf" if result.pypdf_text_available else "metadata_only"
             )
 
-            trigger_reason = self._ocr_trigger_reason(result, ocr_mode, extract_text)
+            trigger_reason = self._ocr_trigger_reason(
+                result, ocr_mode, extract_text, ocr_trigger_reason
+            )
             if trigger_reason:
                 service = self.ocr_service
                 if service is None:
@@ -228,7 +239,7 @@ class PdfService:
                 title_candidates=[
                     item.value
                     for item in result.title_candidates
-                    if not item.source_type.startswith("ocr")
+                    if item.source_type != "ocr_corrected"
                 ],
                 doi_candidates=[
                     item.value
@@ -236,6 +247,12 @@ class PdfService:
                     if item.source_type != "ocr_corrected"
                 ],
                 pmid_candidates=[item.value for item in result.pmid_candidates],
+                ocr_text=(
+                    result.ocr_result.combined_text
+                    if result.ocr_result is not None
+                    and result.ocr_result.status == "success"
+                    else ""
+                ),
             )
             result.local_metadata = asdict(local_metadata)
             result.is_probable_supplement = is_probable_supplement(
@@ -247,22 +264,32 @@ class PdfService:
             result.is_readable = True
         except Exception as exc:
             result.errors.append(f"pdf_unreadable:{type(exc).__name__}")
+        finally:
+            pypdf_logger.removeHandler(handler)
+            pypdf_logger.propagate = previous_propagate
+            result.warnings = list(
+                dict.fromkeys([*result.warnings, *parser_warnings])
+            )
         return self._remember(key, result)
 
     def _ocr_trigger_reason(
-        self, inspection: PdfInspection, mode: str, extract_text: bool
+        self,
+        inspection: PdfInspection,
+        mode: str,
+        extract_text: bool,
+        forced_reason: str | None = None,
     ) -> str:
         if not extract_text or mode == "never" or not self.settings.ocr.enabled:
             return ""
         if mode == "always":
-            return "user_forced"
+            return forced_reason or "user_forced"
         text = inspection.first_page_text.strip()
         if not text:
             return "first_page_text_empty"
         if len(text) < self.settings.ocr.min_text_chars:
             return "first_page_text_too_short"
         printable = sum(character.isprintable() for character in text) / max(1, len(text))
-        if printable < 0.85 or text.count("�") > max(2, len(text) // 20):
+        if printable < 0.85 or text.count("\ufffd") > max(2, len(text) // 20):
             return "first_page_text_abnormal"
         if not (
             inspection.title_candidates
@@ -366,3 +393,24 @@ class PdfService:
             if key and key not in unique:
                 unique[key] = candidate
         return list(unique.values())
+
+
+class _PypdfWarningHandler(logging.Handler):
+    """Collapse noisy pypdf font-dictionary diagnostics into one safe warning."""
+
+    FONT_MARKERS = (
+        "/ascent",
+        "font dictionary",
+        "advanced encoding",
+        "multiple definitions",
+    )
+
+    def __init__(self, target: list[str]):
+        super().__init__(level=logging.WARNING)
+        self.target = target
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage().casefold()
+        if any(marker in message for marker in self.FONT_MARKERS):
+            if "pypdf_font_dictionary_warning" not in self.target:
+                self.target.append("pypdf_font_dictionary_warning")

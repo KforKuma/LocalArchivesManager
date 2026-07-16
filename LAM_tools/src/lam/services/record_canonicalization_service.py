@@ -20,8 +20,7 @@ CANONICAL_PROVIDER_PRIORITY = ("pubmed", "arxiv", "unpaywall")
 
 @dataclass(slots=True)
 class CanonicalizationResult:
-    record_uid: str = ""
-    canonical_id: str = ""
+    paper_uuid: str = ""
     canonical_source: str = ""
     changed_fields: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
@@ -46,29 +45,19 @@ class RegisteredRecordCanonicalizer:
         conflicts = self._conflicts(record, metadata)
         if conflicts:
             return CanonicalizationResult(
-                record_uid=str(record.get("record_uid") or ""),
-                canonical_id=str(record.get("id") or ""),
+                paper_uuid=str(record.get("paper_uuid") or ""),
                 canonical_source=str(record.get("source") or ""),
                 conflicts=conflicts,
             )
 
-        canonical_id = self.canonical_id(metadata, merged, record)
         canonical_source = self.canonical_source(metadata, record)
-        duplicate_ids = [
-            item
-            for item in catalogue.find_by("id", canonical_id)
-            if item.row_number != record.row_number
-        ] if canonical_id and "id" in catalogue.headers else []
-        if duplicate_ids:
+        if self._duplicates_external_identity(catalogue, record, metadata, merged):
             return CanonicalizationResult(
-                record_uid=str(record.get("record_uid") or ""),
-                canonical_id=str(record.get("id") or ""),
+                paper_uuid=str(record.get("paper_uuid") or ""),
                 canonical_source=str(record.get("source") or ""),
-                conflicts=["canonical_id_conflict"],
+                conflicts=["external_identifier_conflict"],
             )
         updates = self._updates(catalogue, record, metadata, merged)
-        if canonical_id and "id" in catalogue.headers:
-            updates["id"] = canonical_id
         if canonical_source and "source" in catalogue.headers:
             updates["source"] = canonical_source
         if "uncertainty" in catalogue.headers:
@@ -76,11 +65,10 @@ class RegisteredRecordCanonicalizer:
         if "date_updated" in catalogue.headers:
             updates["date_updated"] = date.today().isoformat()
 
-        record_uid = catalogue.ensure_record_uid(record)
+        paper_uuid = catalogue.ensure_paper_uuid(record)
         changes = catalogue.update_canonical_fields(record, updates)
         return CanonicalizationResult(
-            record_uid=record_uid,
-            canonical_id=str(record.get("id") or canonical_id),
+            paper_uuid=paper_uuid,
             canonical_source=str(record.get("source") or canonical_source),
             changed_fields=[change.field_name for change in changes],
         )
@@ -111,28 +99,6 @@ class RegisteredRecordCanonicalizer:
                 return provider
         return "local_pdf" if "local_pdf" in current_sources or not sources else sorted(sources)[0]
 
-    @staticmethod
-    def canonical_id(
-        metadata: MetadataRecord,
-        merged: MetadataRecord | None = None,
-        record: CatalogueRecord | None = None,
-    ) -> str:
-        merged = merged or metadata
-        pmid = normalize_pmid(metadata.pmid or merged.pmid or (record.get("pmid") if record else ""))
-        if pmid:
-            return f"PMID:{pmid}"
-        doi = normalize_doi(metadata.doi or merged.doi or (record.get("doi") if record else ""))
-        if doi:
-            return f"DOI:{doi}"
-        arxiv_id = normalize_arxiv_id(metadata.arxiv_id or merged.arxiv_id)
-        if not arxiv_id and record:
-            current_id = str(record.get("id") or "")
-            if current_id.upper().startswith("ARXIV:"):
-                arxiv_id = normalize_arxiv_id(current_id.split(":", 1)[1])
-        if arxiv_id:
-            return f"ARXIV:{arxiv_id}"
-        return str(record.get("id") or "") if record else metadata.canonical_id
-
     def _updates(
         self,
         catalogue: CatalogueService,
@@ -143,13 +109,14 @@ class RegisteredRecordCanonicalizer:
         provider = metadata.catalogue_fields()
         combined = merged.catalogue_fields()
         updates: dict[str, Any] = {}
-        provisional = str(record.get("id") or "").upper().startswith("LOCAL:")
+        provisional = self._is_provisional(record)
         for field_name in (
             "title",
             "authors",
             "year",
             "doi",
             "pmid",
+            "arxiv_id",
             "abstract",
             "keywords",
             "auto_tags",
@@ -190,7 +157,7 @@ class RegisteredRecordCanonicalizer:
 
     def _conflicts(self, record: CatalogueRecord, metadata: MetadataRecord) -> list[str]:
         conflicts: list[str] = []
-        provisional = str(record.get("id") or "").upper().startswith("LOCAL:")
+        provisional = self._is_provisional(record)
         current_pmid = normalize_pmid(record.get("pmid"))
         provider_pmid = normalize_pmid(metadata.pmid)
         if current_pmid and provider_pmid and current_pmid != provider_pmid:
@@ -199,6 +166,10 @@ class RegisteredRecordCanonicalizer:
         provider_doi = normalize_doi(metadata.doi)
         if current_doi and provider_doi and current_doi != provider_doi:
             conflicts.append("metadata_doi_conflict")
+        current_arxiv = normalize_arxiv_id(record.get("arxiv_id"))
+        provider_arxiv = normalize_arxiv_id(metadata.arxiv_id)
+        if current_arxiv and provider_arxiv and current_arxiv != provider_arxiv:
+            conflicts.append("metadata_arxiv_id_conflict")
 
         for field_name, provider_value in (
             ("title", metadata.title),
@@ -231,11 +202,41 @@ class RegisteredRecordCanonicalizer:
         return list(dict.fromkeys(conflicts))
 
     @staticmethod
+    def _duplicates_external_identity(
+        catalogue: CatalogueService,
+        record: CatalogueRecord,
+        metadata: MetadataRecord,
+        merged: MetadataRecord,
+    ) -> bool:
+        candidates = {
+            "pmid": normalize_pmid(metadata.pmid or merged.pmid),
+            "doi": normalize_doi(metadata.doi or merged.doi),
+            "arxiv_id": normalize_arxiv_id(metadata.arxiv_id or merged.arxiv_id),
+        }
+        return any(
+            value
+            and any(item.row_number != record.row_number for item in catalogue.find_by(field, value))
+            for field, value in candidates.items()
+        )
+
+    @staticmethod
+    def _is_provisional(record: CatalogueRecord) -> bool:
+        if normalized_text(record.get("source")) == "local_pdf":
+            return True
+        return any(
+            line.lstrip().upper().startswith("NEEDS_REVIEW:")
+            and "field=paper_identity" in normalized_text(line)
+            for line in str(record.get("uncertainty") or "").splitlines()
+        )
+
+    @staticmethod
     def _equivalent(field_name: str, left: Any, right: Any) -> bool:
         if field_name == "doi":
             return normalize_doi(left) == normalize_doi(right)
         if field_name == "pmid":
             return normalize_pmid(left) == normalize_pmid(right)
+        if field_name == "arxiv_id":
+            return normalize_arxiv_id(left) == normalize_arxiv_id(right)
         if field_name == "title":
             return titles_tolerantly_equivalent(left, right)
         if field_name == "authors":

@@ -38,6 +38,7 @@ COMMANDS = (
     CommandDefinition("repair-publication-types", "Normalize publication types and Registered filenames", "Maintenance", "maintenance", False, True, True, False, True, True, True, STANDARD_EXIT_CODES, "publication_type_repair"),
     CommandDefinition("migrate-topics", "Move legacy root topic directories into Topics/", "Maintenance", "maintenance", False, True, True, False, True, True, True, STANDARD_EXIT_CODES, "topic_migration"),
     CommandDefinition("migrate-documents", "Create Documents sheet and migrate legacy main PDFs", "Maintenance", "maintenance", False, True, False, False, True, True, True, STANDARD_EXIT_CODES, "document_migration"),
+    CommandDefinition("migrate-identifiers", "Adopt paper_uuid and remove legacy Catalogue identity/file columns", "Maintenance", "maintenance", False, True, False, False, True, True, True, STANDARD_EXIT_CODES, "identifier_migration"),
     CommandDefinition("doctor", "Check OCR and local runtime availability", "Maintenance", "maintenance", True, False, False, False, False, False, False, STANDARD_EXIT_CODES, "doctor"),
     CommandDefinition("commands", "List the public CLI command registry", "Audit", "audit", True, False, False, False, False, False, False, STANDARD_EXIT_CODES, "command_registry"),
 )

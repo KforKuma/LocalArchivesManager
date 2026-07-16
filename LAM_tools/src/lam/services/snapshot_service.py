@@ -415,14 +415,14 @@ class SnapshotService:
         old_rows = list(previous.get("rows", []))
         new_rows = list(current.get("rows", []))
         old_by_uid = {
-            normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid")): index
+            normalized_text(row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid")): index
             for index, row in enumerate(old_rows)
-            if normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid"))
+            if normalized_text(row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid"))
         }
         new_by_uid = {
-            normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid")): index
+            normalized_text(row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid")): index
             for index, row in enumerate(new_rows)
-            if normalized_text(row.get("record_uid") or row.get("fields", {}).get("record_uid"))
+            if normalized_text(row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid"))
         }
         paired: list[tuple[dict[str, Any], dict[str, Any]]] = []
         matched_old: set[int] = set()
@@ -462,10 +462,10 @@ class SnapshotService:
                     changes.append(
                         {
                             "row_number": new_row.get("row_number"),
-                            "record_uid": new_row.get("record_uid")
-                            or new.get("record_uid")
-                            or old_row.get("record_uid")
-                            or old.get("record_uid"),
+                            "paper_uuid": new_row.get("paper_uuid")
+                            or new.get("paper_uuid")
+                            or old_row.get("paper_uuid")
+                            or old.get("paper_uuid"),
                             "change": "field_changed",
                             "field": field_name,
                             "old": old.get(field_name),
@@ -477,7 +477,7 @@ class SnapshotService:
                 changes.append(
                     {
                         "row_number": row.get("row_number"),
-                        "record_uid": row.get("record_uid") or row.get("fields", {}).get("record_uid"),
+                        "paper_uuid": row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid"),
                         "change": "row_missing",
                     }
                 )
@@ -486,7 +486,7 @@ class SnapshotService:
                 changes.append(
                     {
                         "row_number": row.get("row_number"),
-                        "record_uid": row.get("record_uid") or row.get("fields", {}).get("record_uid"),
+                        "paper_uuid": row.get("paper_uuid") or row.get("fields", {}).get("paper_uuid"),
                         "change": "row_added",
                     }
                 )

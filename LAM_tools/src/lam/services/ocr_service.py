@@ -30,7 +30,10 @@ from ..utils.text import normalize_title, title_candidates_from_page
 
 OCR_NOISE = re.compile(
     r"^(?:original article|research article|review|open access|received|accepted|"
-    r"published|copyright|volume\b.*|issue\b.*|page\b.*|https?://.*|www\..*|doi\b.*)$",
+    r"published|copyright|vol(?:ume)?\.?\s*\d+.*|no\.?\s*\d+.*|"
+    r"第\s*\d+\s*卷.*|issue\b.*|page\b.*|p(?:p)?\.?\s*\d+.*|"
+    r"issn\b.*|https?://.*|www\..*|doi\b.*|abstract|摘\s*要|"
+    r"keywords?|关\s*键\s*词)$",
     re.I,
 )
 
@@ -411,7 +414,15 @@ class OcrService:
             ys = [point[1] for point in block.bounding_box]
             if not ys or max(ys) > result.image_height * 0.45:
                 continue
-            if block.confidence < cfg.min_confidence or OCR_NOISE.match(block.text.strip()):
+            if (
+                block.confidence < cfg.min_confidence
+                or OCR_NOISE.match(block.text.strip())
+                or re.search(
+                    r"(?:\bv\s*ol(?:ume)?\s*\.?\s*\d+|\bn\s*o\s*\.?\s*\d+|第\s*\d+\s*卷)",
+                    block.text,
+                    re.I,
+                )
+            ):
                 continue
             xs = [point[0] for point in block.bounding_box]
             top_blocks.append((sum(ys) / len(ys), min(xs), block.text))
