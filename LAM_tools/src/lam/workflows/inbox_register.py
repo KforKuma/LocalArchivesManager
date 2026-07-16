@@ -26,6 +26,7 @@ from ..utils.journal import journal_is_variant, journals_equivalent
 from ..utils.normalize import normalized_text
 from ..utils.text import normalize_title
 from ..utils.uncertainty import confirmation_for, confirmed_value
+from ..utils.supplementary import is_supported_document_extension
 
 
 class InboxRegisterWorkflow:
@@ -94,6 +95,34 @@ class InboxRegisterWorkflow:
 
     def _eligible_pdf_files(self) -> list[Path]:
         return self._discover_inbox()[0]
+
+    def _discover_inbox_documents(self) -> tuple[list[Path], list[dict[str, Any]]]:
+        """Discover supported 0.5.1 document files without opening their content."""
+        eligible: list[Path] = []
+        skipped: list[dict[str, Any]] = []
+        if not self.settings.inbox_dir.is_dir():
+            return eligible, skipped
+        for path in sorted(
+            self.settings.inbox_dir.iterdir(), key=lambda item: item.name.casefold()
+        ):
+            relative = path.relative_to(self.settings.library_root).as_posix()
+            if path.is_dir():
+                skipped.append({"file": relative, "reason": "inbox_subdirectory"})
+                continue
+            if path.name.startswith((".", "~")):
+                skipped.append({"file": relative, "reason": "hidden_or_temporary"})
+                continue
+            if path.is_symlink() or self._is_reparse_point(path):
+                skipped.append({"file": relative, "reason": "symlink_or_reparse_point"})
+                continue
+            if not is_supported_document_extension(path.suffix):
+                skipped.append({"file": relative, "reason": "unsupported_document_type"})
+                continue
+            eligible.append(path)
+        return eligible, skipped
+
+    def _eligible_document_files(self) -> list[Path]:
+        return self._discover_inbox_documents()[0]
 
     @staticmethod
     def _is_reparse_point(path: Path) -> bool:

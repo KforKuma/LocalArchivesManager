@@ -115,6 +115,7 @@ def library_factory(tmp_path: Path):
         root.mkdir()
         (root / "Inbox").mkdir()
         (root / "Registered").mkdir()
+        (root / "Topics").mkdir()
         create_catalogue(root, rows)
         for relative, marker in (files or {}).items():
             write_pdf(root / relative, marker)

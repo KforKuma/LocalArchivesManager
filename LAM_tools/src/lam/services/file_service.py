@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import os
-import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from ..directory_policy import DirectoryPolicy
 from ..exceptions import FileOperationError
 from ..models import FileOperation, OperationType
-from ..schema import RESERVED_DIRECTORIES
 from ..utils.hashing import full_hash
-from ..utils.filename import WINDOWS_UNSAFE, sanitize_filename
+from ..utils.filename import sanitize_filename
+from ..utils.supplementary import is_supported_document_extension
 
 
 class FileService:
-    def __init__(self, library_root: Path, max_filename_length: int = 180):
+    def __init__(
+        self,
+        library_root: Path,
+        max_filename_length: int = 180,
+        extra_reserved: tuple[str, ...] = (),
+    ):
         self.library_root = library_root.resolve()
         self.inbox_dir = (self.library_root / "Inbox").resolve()
         self.registered_dir = (self.library_root / "Registered").resolve()
+        self.policy = DirectoryPolicy(self.library_root, extra_reserved)
+        self.topics_dir = self.policy.topics_root.resolve()
         self.max_filename_length = max_filename_length
 
     def require_within_root(self, path: Path) -> Path:
@@ -28,36 +35,32 @@ class FileService:
         return resolved
 
     def validate_topic_folder(self, folder_name: str) -> Path:
-        name = str(folder_name or "").strip()
-        if not name or name in {".", ".."}:
-            raise FileOperationError("Topic folder is empty or invalid")
-        if name.startswith("."):
-            raise FileOperationError(f"Hidden directories cannot be topic folders: {name}")
-        if "/" in name or "\\" in name or WINDOWS_UNSAFE.search(name):
-            raise FileOperationError(f"Topic folder is not a direct safe child: {name}")
-        if name.endswith((" ", ".")) or normalized_reserved(name):
-            raise FileOperationError(f"Topic folder is reserved or unsafe: {name}")
-        target = self.require_within_root(self.library_root / name)
-        if target.parent != self.library_root:
-            raise FileOperationError(f"Topic folder is not a direct child: {name}")
+        name = self.policy.validate_topic_folder(folder_name)
+        target = self.policy.topic_path(name)
         if not target.exists():
-            similar = self._suspiciously_similar(name)
+            similar = self._suspiciously_similar(target)
             if similar:
                 raise FileOperationError(
                     f"New topic folder {name!r} is suspiciously similar to existing {similar!r}"
                 )
         return target
 
-    def _suspiciously_similar(self, proposed: str) -> str | None:
-        proposed_key = proposed.casefold()
-        for entry in self.library_root.iterdir():
-            if not entry.is_dir() or entry.name.casefold() in RESERVED_DIRECTORIES:
+    def _suspiciously_similar(self, proposed: Path) -> str | None:
+        parent = proposed.parent
+        if not parent.is_dir():
+            return None
+        proposed_key = proposed.name.casefold()
+        for entry in parent.iterdir():
+            if not entry.is_dir() or entry.name.startswith("."):
                 continue
             existing_key = entry.name.casefold()
             if existing_key == proposed_key:
                 return None
             if SequenceMatcher(None, proposed_key, existing_key).ratio() >= 0.88:
-                return entry.name
+                try:
+                    return entry.relative_to(self.topics_dir).as_posix()
+                except ValueError:
+                    return entry.name
         return None
 
     def plan_move(
@@ -189,6 +192,93 @@ class FileService:
             )
         self._apply_no_replace(operation, "registration")
 
+    def plan_document_registration_move(
+        self,
+        source: Path,
+        target_filename: str,
+        catalogue_row: int,
+        reason: str,
+    ) -> FileOperation:
+        """Plan one managed PDF/XLSX/XLS/CSV move from Inbox to Registered."""
+        source = self.require_within_root(source)
+        if not source.is_file() or source.parent != self.inbox_dir:
+            raise FileOperationError(
+                f"Document registration only moves direct Inbox files: {source}"
+            )
+        if source.is_symlink() or self._is_reparse_point(source):
+            raise FileOperationError(
+                f"Document registration refuses symlinks or reparse points: {source}"
+            )
+        if not is_supported_document_extension(source.suffix):
+            raise FileOperationError(
+                f"Unsupported document registration extension: {source.suffix or '<none>'}"
+            )
+        safe_name = sanitize_filename(
+            target_filename,
+            self.max_filename_length,
+            preserve_extension_case=True,
+        )
+        target_path = Path(target_filename)
+        if safe_name != target_filename or target_path.name != target_filename:
+            raise FileOperationError(
+                f"Document registration target filename is not already safe: {target_filename!r}"
+            )
+        if (
+            not is_supported_document_extension(target_path.suffix)
+            or target_path.suffix.casefold() != source.suffix.casefold()
+        ):
+            raise FileOperationError(
+                "Document registration must preserve a supported source extension"
+            )
+        target = self.require_within_root(self.registered_dir / target_filename)
+        stat = source.stat()
+        return FileOperation(
+            OperationType.MOVE,
+            source,
+            target,
+            catalogue_row,
+            reason,
+            expected_size=stat.st_size,
+            expected_mtime_ns=stat.st_mtime_ns,
+        )
+
+    def apply_document_registration_move(self, operation: FileOperation) -> None:
+        source = operation.source
+        assert source is not None
+        source = self.require_within_root(source)
+        target = self.require_within_root(operation.target)
+        if source.parent != self.inbox_dir or not is_supported_document_extension(
+            source.suffix
+        ):
+            raise FileOperationError(
+                f"Document registration source is no longer eligible: {source}"
+            )
+        if source.is_symlink() or self._is_reparse_point(source):
+            raise FileOperationError(
+                f"Document registration source became a symlink or reparse point: {source}"
+            )
+        if target.parent != self.registered_dir:
+            raise FileOperationError(
+                f"Document registration target is not directly in Registered: {target}"
+            )
+        if (
+            not is_supported_document_extension(target.suffix)
+            or target.suffix.casefold() != source.suffix.casefold()
+        ):
+            raise FileOperationError(
+                "Document registration target does not preserve the source extension"
+            )
+        safe_name = sanitize_filename(
+            target.name,
+            self.max_filename_length,
+            preserve_extension_case=True,
+        )
+        if safe_name != target.name:
+            raise FileOperationError(
+                f"Document registration target filename became unsafe: {target.name!r}"
+            )
+        self._apply_no_replace(operation, "document registration")
+
     def plan_registered_rename(
         self,
         source: Path,
@@ -241,11 +331,10 @@ class FileService:
         self.require_within_root(source)
         self.require_within_root(operation.target)
         self.workflow4_source_kind(source)
-        if operation.target.parent.parent != self.library_root:
-            raise FileOperationError(
-                f"Workflow 4 target is not a direct topic folder: {operation.target}"
-            )
-        self.validate_topic_folder(operation.target.parent.name)
+        relative_topic = self.policy.relative_topic_for_path(operation.target.parent)
+        if not relative_topic:
+            raise FileOperationError(f"Workflow 4 target is outside Topics/: {operation.target}")
+        self.validate_topic_folder(relative_topic)
         self._apply_no_replace(operation, "filing")
 
     def workflow4_source_kind(self, source: Path) -> str:
@@ -260,28 +349,46 @@ class FileService:
             return "registered"
         if source.parent == self.inbox_dir:
             raise FileOperationError(f"Workflow 4 refuses Inbox sources: {source}")
-        parent = source.parent
-        if parent.parent != self.library_root:
+        try:
+            relative = source.relative_to(self.topics_dir)
+        except ValueError as exc:
+            try:
+                root_relative = source.relative_to(self.library_root)
+            except ValueError:
+                root_relative = Path()
+            if len(root_relative.parts) >= 2:
+                raise FileOperationError(
+                    "legacy_topic_location: Workflow 4 will not create or move from "
+                    "root-level topic directories; run migrate-topics."
+                ) from exc
             raise FileOperationError(
-                f"Workflow 4 only accepts Registered or top-level topic PDFs: {source}"
-            )
-        name = parent.name
-        if (
-            name.startswith(".")
-            or normalized_reserved(name)
-            or parent.is_symlink()
-            or self._is_reparse_point(parent)
-        ):
-            raise FileOperationError(f"Workflow 4 source directory is managed or unsafe: {parent}")
+                f"Workflow 4 only accepts Registered or Topics PDFs: {source}"
+            ) from exc
+        if len(relative.parts) < 2:
+            raise FileOperationError(f"Workflow 4 requires a topic below Topics/: {source}")
+        for parent in source.parents:
+            if parent == self.topics_dir:
+                break
+            if (
+                parent.name.startswith(".")
+                or parent.is_symlink()
+                or self._is_reparse_point(parent)
+            ):
+                raise FileOperationError(
+                    f"Workflow 4 source directory is managed or unsafe: {parent}"
+                )
         return "topic"
 
     def remove_empty_topic_directory(self, directory: Path) -> bool:
         directory = self.require_within_root(directory)
-        if directory.parent != self.library_root:
+        try:
+            relative = directory.relative_to(self.topics_dir)
+        except ValueError:
+            return False
+        if not relative.parts:
             return False
         if (
-            directory.name.startswith(".")
-            or normalized_reserved(directory.name)
+            any(part.startswith(".") for part in relative.parts)
             or directory.is_symlink()
             or self._is_reparse_point(directory)
         ):
@@ -294,6 +401,93 @@ class FileService:
         except StopIteration:
             directory.rmdir()
             return True
+
+    def plan_topic_directory_move(
+        self, source: Path, target: Path
+    ) -> tuple[tuple[str, str, int, int], ...]:
+        source = self.require_within_root(source)
+        target = self.require_within_root(target)
+        if source.parent != self.library_root:
+            raise FileOperationError("Legacy topic migration source must be a root directory")
+        if source.is_symlink() or self._is_reparse_point(source) or not source.is_dir():
+            raise FileOperationError(f"Legacy topic source is unsafe: {source}")
+        if target.parent != self.topics_dir:
+            raise FileOperationError("Topic migration target must be directly below Topics/")
+        self.policy.validate_topic_folder(target.name)
+        if target.exists() and (not target.is_dir() or any(target.iterdir())):
+            raise FileOperationError(f"Topic migration target is not empty: {target}")
+        return self._directory_signature(source)
+
+    def apply_topic_directory_move(
+        self,
+        source: Path,
+        target: Path,
+        expected_signature: tuple[tuple[str, str, int, int], ...],
+    ) -> None:
+        source = self.require_within_root(source)
+        target = self.require_within_root(target)
+        if self._directory_signature(source) != expected_signature:
+            raise FileOperationError(f"Topic directory changed after planning: {source}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        removed_empty_target = False
+        if target.exists():
+            if not target.is_dir() or any(target.iterdir()):
+                raise FileOperationError(f"Topic migration target became non-empty: {target}")
+            target.rmdir()
+            removed_empty_target = True
+        try:
+            if os.name != "nt":
+                raise FileOperationError(
+                    "No-overwrite directory moves are currently supported only on Windows"
+                )
+            os.rename(source, target)
+        except Exception as exc:
+            if removed_empty_target:
+                target.mkdir(parents=True, exist_ok=True)
+            if isinstance(exc, FileOperationError):
+                raise
+            raise FileOperationError(f"Cannot migrate topic directory {source} to {target}") from exc
+        if source.exists() or not target.is_dir():
+            raise FileOperationError(f"Topic directory move verification failed: {source} -> {target}")
+
+    def rollback_topic_directory_move(self, source: Path, target: Path) -> None:
+        source = self.require_within_root(source)
+        target = self.require_within_root(target)
+        if source.exists() or not target.is_dir():
+            raise FileOperationError(f"Cannot safely roll back topic migration: {target}")
+        try:
+            if os.name != "nt":
+                raise FileOperationError(
+                    "No-overwrite directory rollbacks are currently supported only on Windows"
+                )
+            os.rename(target, source)
+        except Exception as exc:
+            if isinstance(exc, FileOperationError):
+                raise
+            raise FileOperationError(f"Topic migration rollback failed: {target} -> {source}") from exc
+
+    def _directory_signature(
+        self, directory: Path
+    ) -> tuple[tuple[str, str, int, int], ...]:
+        if not directory.is_dir():
+            raise FileOperationError(f"Topic directory is missing: {directory}")
+        entries: list[tuple[str, str, int, int]] = []
+        for path in [directory, *directory.rglob("*")]:
+            if path.is_symlink() or self._is_reparse_point(path):
+                raise FileOperationError(
+                    f"Topic migration refuses symlinks or reparse points: {path}"
+                )
+            stat = path.stat()
+            relative = "." if path == directory else path.relative_to(directory).as_posix()
+            entries.append(
+                (
+                    relative,
+                    "directory" if path.is_dir() else "file",
+                    stat.st_size if path.is_file() else 0,
+                    stat.st_mtime_ns,
+                )
+            )
+        return tuple(sorted(entries, key=lambda item: item[0].casefold()))
 
     def _apply_no_replace(self, operation: FileOperation, label: str) -> None:
         source = operation.source
@@ -312,7 +506,7 @@ class FileService:
             raise FileOperationError(f"{label.title()} source changed after planning: {source}")
         if operation.target.exists():
             raise FileOperationError(f"Refusing to overwrite existing file: {operation.target}")
-        operation.target.parent.mkdir(parents=False, exist_ok=True)
+        operation.target.parent.mkdir(parents=True, exist_ok=True)
         try:
             if os.name != "nt":
                 raise FileOperationError(
@@ -356,15 +550,3 @@ class FileService:
     def _is_reparse_point(path: Path) -> bool:
         attributes = getattr(path.stat(), "st_file_attributes", 0)
         return bool(attributes & 0x400)
-
-
-def normalized_reserved(name: str) -> bool:
-    stem = re.sub(r"\..*$", "", name).casefold()
-    return stem in RESERVED_DIRECTORIES or stem in {
-        "con",
-        "prn",
-        "aux",
-        "nul",
-        *(f"com{i}" for i in range(1, 10)),
-        *(f"lpt{i}" for i in range(1, 10)),
-    }

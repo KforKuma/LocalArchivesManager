@@ -1,4 +1,5 @@
 RECOMMENDED_FIELDS = (
+    "paper_uuid",
     "id",
     "record_uid",
     "title",
@@ -25,6 +26,59 @@ RECOMMENDED_FIELDS = (
     "uncertainty",
 )
 
+CATALOGUE_051_FIELDS = (
+    "paper_uuid",
+    "title",
+    "authors",
+    "year",
+    "journal",
+    "journal_abbrev",
+    "doi",
+    "pmid",
+    "arxiv_id",
+    "publication_type",
+    "abstract",
+    "keywords",
+    "manual_tags",
+    "auto_tags",
+    "suggested_topic",
+    "topic_folder",
+    "source",
+    "notes",
+    "uncertainty",
+    "date_added",
+    "date_updated",
+)
+
+DOCUMENT_FIELDS = (
+    "document_id",
+    "paper_uuid",
+    "document_type",
+    "supplementary_type",
+    "sequence",
+    "filename",
+    "relative_path",
+    "extension",
+    "sha256",
+    "file_status",
+    "source",
+    "uncertainty",
+    "date_added",
+    "date_updated",
+)
+
+DOCUMENT_TYPES = {"main", "supplementary"}
+SUPPLEMENTARY_TYPES = {
+    "Supplementary",
+    "Table",
+    "Figure",
+    "Methods",
+    "Data",
+    "Appendix",
+    "Other",
+}
+MANAGED_DOCUMENT_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv"}
+
 PHASE1_REQUIRED_FIELDS = {
     "id",
     "title",
@@ -45,6 +99,7 @@ MACHINE_FILLABLE_FIELDS = {
     "journal_abbrev",
     "doi",
     "pmid",
+    "arxiv_id",
     "publication_type",
     "abstract",
     "keywords",
@@ -62,9 +117,10 @@ MACHINE_MAINTAINED_FIELDS = {
     "uncertainty",
 }
 
-SYSTEM_IDENTITY_FIELDS = {"id", "record_uid"}
+SYSTEM_IDENTITY_FIELDS = {"id", "record_uid", "paper_uuid"}
 
 SNAPSHOT_FIELDS = (
+    "paper_uuid",
     "id",
     "record_uid",
     "title",
@@ -74,18 +130,3 @@ SNAPSHOT_FIELDS = (
     "pdf_relative_path",
     "uncertainty",
 )
-
-RESERVED_DIRECTORIES = {
-    ".agents",
-    ".codex",
-    ".git",
-    ".idea",
-    ".library_state",
-    "__pycache__",
-    "build",
-    "dist",
-    "inbox",
-    "lam_tools",
-    "registered",
-    "scripts",
-}

@@ -32,9 +32,9 @@ def test_registered_pdf_is_filed_and_final_checked(library_factory):
     sheet = workbook["Catalogue"]
     assert result.status == WorkflowStatus.SUCCESS
     assert not (root / "Registered" / "paper.pdf").exists()
-    assert (root / "Topic_A" / "paper.pdf").exists()
+    assert (root / "Topics" / "Topic_A" / "paper.pdf").exists()
     assert sheet["H2"].value == "filed"
-    assert sheet["J2"].value == "Topic_A/paper.pdf"
+    assert sheet["J2"].value == "Topics/Topic_A/paper.pdf"
     assert result.details["final_check"]["status"] in {"success", "no_changes"}
 
 
@@ -58,7 +58,7 @@ def test_dry_run_plans_move_without_changes(library_factory):
     assert result.status == WorkflowStatus.SUCCESS
     assert result.completed[0]["action"] == "would_file_from_registered"
     assert (root / "Registered" / "paper.pdf").exists()
-    assert not (root / "Topic_A").exists()
+    assert not (root / "Topics" / "Topic_A").exists()
     assert not list(root.glob("catalogue.backup.*.xlsx"))
     assert not (root / ".library_state" / "file_manifest.json").exists()
 
@@ -86,7 +86,7 @@ def test_unclassified_and_collision_are_left_in_place(library_factory):
         {
             "Registered/one.pdf": b"one",
             "Registered/two.pdf": b"source",
-            "Topic_A/two.pdf": b"different",
+            "Topics/Topic_A/two.pdf": b"different",
         },
     )
     settings = Settings.from_root(root)
@@ -95,7 +95,7 @@ def test_unclassified_and_collision_are_left_in_place(library_factory):
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert (root / "Registered" / "one.pdf").exists()
     assert (root / "Registered" / "two.pdf").exists()
-    assert (root / "Topic_A" / "two.pdf").read_bytes().find(b"different") >= 0
+    assert (root / "Topics" / "Topic_A" / "two.pdf").read_bytes().find(b"different") >= 0
 
 
 def test_inbox_pdf_is_never_filed_by_workflow4(library_factory):
@@ -118,7 +118,7 @@ def test_inbox_pdf_is_never_filed_by_workflow4(library_factory):
     assert result.status == WorkflowStatus.NEEDS_REVIEW
     assert not result.completed
     assert (root / "Inbox" / "paper.pdf").exists()
-    assert not (root / "Topic_A").exists()
+    assert not (root / "Topics" / "Topic_A").exists()
 
 
 def test_final_check_needs_review_overrides_no_changes(library_factory):
@@ -130,11 +130,11 @@ def test_final_check_needs_review_overrides_no_changes(library_factory):
                 "topic_folder": "Topic_A",
                 "pdf_status": "filed",
                 "pdf_filename": "missing.pdf",
-                "pdf_relative_path": "Topic_A/missing.pdf",
+                "pdf_relative_path": "Topics/Topic_A/missing.pdf",
             }
         ]
     )
-    (root / "Topic_A").mkdir()
+    (root / "Topics" / "Topic_A").mkdir()
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
     result = CatalogueFilingWorkflow(settings).run()
@@ -152,23 +152,23 @@ def test_filed_pdf_is_refiled_after_topic_folder_change(library_factory):
                 "topic_folder": "Topic_B",
                 "pdf_status": "filed",
                 "pdf_filename": "paper.pdf",
-                "pdf_relative_path": "Topic_A/paper.pdf",
+                "pdf_relative_path": "Topics/Topic_A/paper.pdf",
             }
         ],
-        {"Topic_A/paper.pdf": b"same"},
+        {"Topics/Topic_A/paper.pdf": b"same"},
     )
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
     DailyCheckWorkflow(settings).run()
     result = CatalogueFilingWorkflow(settings).run()
     assert result.status == WorkflowStatus.SUCCESS
-    assert not (root / "Topic_A" / "paper.pdf").exists()
-    assert (root / "Topic_B" / "paper.pdf").exists()
-    assert not (root / "Topic_A").exists()
+    assert not (root / "Topics" / "Topic_A" / "paper.pdf").exists()
+    assert (root / "Topics" / "Topic_B" / "paper.pdf").exists()
+    assert not (root / "Topics" / "Topic_A").exists()
     assert any(item.get("action") == "refiled_from_topic" for item in result.completed)
-    assert result.details["removed_empty_directories"] == ["Topic_A"]
+    assert result.details["removed_empty_directories"] == ["Topics/Topic_A"]
     workbook = load_workbook(root / "catalogue.xlsx")
-    assert workbook["Catalogue"]["J2"].value == "Topic_B/paper.pdf"
+    assert workbook["Catalogue"]["J2"].value == "Topics/Topic_B/paper.pdf"
     journal = next((root / ".library_state" / "runs").glob("*-filing/operation_journal.json"))
     payload = json.loads(journal.read_text(encoding="utf-8"))
     assert payload["status"] == "final_check_committed"
@@ -191,19 +191,19 @@ def test_refile_keeps_nonempty_old_topic_directory(library_factory):
                 "topic_folder": "Topic_B",
                 "pdf_status": "filed",
                 "pdf_filename": "paper.pdf",
-                "pdf_relative_path": "Topic_A/paper.pdf",
+                "pdf_relative_path": "Topics/Topic_A/paper.pdf",
             }
         ],
-        {"Topic_A/paper.pdf": b"same"},
+        {"Topics/Topic_A/paper.pdf": b"same"},
     )
-    summary = root / "Topic_A" / "summary.md"
+    summary = root / "Topics" / "Topic_A" / "summary.md"
     summary.write_text("preserve", encoding="utf-8")
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
     result = CatalogueFilingWorkflow(settings).run()
     assert result.status == WorkflowStatus.SUCCESS
     assert summary.exists()
-    assert (root / "Topic_A").exists()
+    assert (root / "Topics" / "Topic_A").exists()
     assert result.details["removed_empty_directories"] == []
 
 
@@ -216,20 +216,20 @@ def test_refile_target_collision_does_not_overwrite(library_factory):
                 "topic_folder": "Topic_B",
                 "pdf_status": "filed",
                 "pdf_filename": "paper.pdf",
-                "pdf_relative_path": "Topic_A/paper.pdf",
+                "pdf_relative_path": "Topics/Topic_A/paper.pdf",
             }
         ],
         {
-            "Topic_A/paper.pdf": b"source",
-            "Topic_B/paper.pdf": b"different",
+            "Topics/Topic_A/paper.pdf": b"source",
+            "Topics/Topic_B/paper.pdf": b"different",
         },
     )
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
     result = CatalogueFilingWorkflow(settings).run()
     assert result.status == WorkflowStatus.NEEDS_REVIEW
-    assert (root / "Topic_A" / "paper.pdf").exists()
-    assert (root / "Topic_B" / "paper.pdf").exists()
+    assert (root / "Topics" / "Topic_A" / "paper.pdf").exists()
+    assert (root / "Topics" / "Topic_B" / "paper.pdf").exists()
     assert any(item.get("issue") == "target_collision" for item in result.needs_review)
 
 
@@ -292,4 +292,25 @@ def test_workflow4_does_not_inspect_pdf_or_call_metadata_workflow(
     settings.ensure_runtime_directories()
     result = CatalogueFilingWorkflow(settings).run()
     assert result.status == WorkflowStatus.SUCCESS
-    assert (root / "Topic_A" / "paper.pdf").exists()
+    assert (root / "Topics" / "Topic_A" / "paper.pdf").exists()
+
+
+def test_workflow4_supports_nested_topics(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Nested",
+                "topic_folder": "IBD/Epithelial",
+                "pdf_status": "registered",
+                "pdf_filename": "paper.pdf",
+                "pdf_relative_path": "Registered/paper.pdf",
+            }
+        ],
+        {"Registered/paper.pdf": b"paper"},
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = CatalogueFilingWorkflow(settings).run()
+    assert result.status == WorkflowStatus.SUCCESS
+    assert (root / "Topics" / "IBD" / "Epithelial" / "paper.pdf").exists()

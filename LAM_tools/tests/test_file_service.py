@@ -27,7 +27,7 @@ def test_rejects_path_escape(library_factory):
 
 def test_rejects_suspicious_topic_typo(library_factory):
     root = library_factory([])
-    (root / "T_cell").mkdir()
+    (root / "Topics" / "T_cell").mkdir()
     service = FileService(root)
     with pytest.raises(FileOperationError, match="suspiciously similar"):
         service.validate_topic_folder("T_cells")
@@ -38,13 +38,13 @@ def test_collision_is_reported_without_overwrite(library_factory):
         [],
         {
             "Registered/paper.pdf": b"source",
-            "Topic_A/paper.pdf": b"different",
+            "Topics/Topic_A/paper.pdf": b"different",
         },
     )
     service = FileService(root)
     operation = service.plan_move(
         root / "Registered" / "paper.pdf",
-        root / "Topic_A",
+        root / "Topics" / "Topic_A",
         2,
         "test",
     )
@@ -62,7 +62,7 @@ def test_all_operations_are_blocked_when_rows_share_a_target(library_factory):
         },
     )
     service = FileService(root)
-    target = root / "Topic_A"
+    target = root / "Topics" / "Topic_A"
     first = service.plan_move(root / "Registered" / "paper.pdf", target, 2, "test")
     other = service.plan_move(root / "Registered" / "other.pdf", target, 3, "test")
     operations = [first, replace(other, target=first.target)]
@@ -78,23 +78,23 @@ def test_workflow4_source_allows_registered_or_topic_pdf_only(library_factory):
             "Inbox/paper.pdf": b"inbox",
             "Registered/registered.pdf": b"registered",
             "Registered/notes.txt": b"not pdf",
-            "Topic_A/filed.pdf": b"filed",
+            "Topics/Topic_A/filed.pdf": b"filed",
         },
     )
     service = FileService(root)
     assert service.workflow4_source_kind(root / "Registered" / "registered.pdf") == "registered"
-    assert service.workflow4_source_kind(root / "Topic_A" / "filed.pdf") == "topic"
+    assert service.workflow4_source_kind(root / "Topics" / "Topic_A" / "filed.pdf") == "topic"
     with pytest.raises(FileOperationError, match="refuses Inbox"):
-        service.plan_move(root / "Inbox" / "paper.pdf", root / "Topic_A", 2, "test")
+        service.plan_move(root / "Inbox" / "paper.pdf", root / "Topics" / "Topic_A", 2, "test")
     with pytest.raises(FileOperationError, match="not a PDF"):
-        service.plan_move(root / "Registered" / "notes.txt", root / "Topic_A", 3, "test")
+        service.plan_move(root / "Registered" / "notes.txt", root / "Topics" / "Topic_A", 3, "test")
 
 
 def test_target_created_after_planning_is_never_overwritten(library_factory):
     root = library_factory([], {"Registered/paper.pdf": b"source"})
     service = FileService(root)
     operation = service.plan_move(
-        root / "Registered" / "paper.pdf", root / "Topic_A", 2, "test"
+        root / "Registered" / "paper.pdf", root / "Topics" / "Topic_A", 2, "test"
     )
     operation.target.parent.mkdir()
     operation.target.write_bytes(b"late target")
@@ -110,7 +110,7 @@ def test_kernel_move_rejects_target_created_after_final_check(
     root = library_factory([], {"Registered/paper.pdf": b"source"})
     service = FileService(root)
     operation = service.plan_move(
-        root / "Registered" / "paper.pdf", root / "Topic_A", 2, "test"
+        root / "Registered" / "paper.pdf", root / "Topics" / "Topic_A", 2, "test"
     )
     real_rename = os.rename
 

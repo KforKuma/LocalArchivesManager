@@ -425,6 +425,10 @@ class MetadataQueryWorkflow:
             backup = catalogue.save_atomic()
             if backup:
                 result.catalogue_backup = str(backup)
+            if catalogue.maintenance_actions:
+                result.details["backup_maintenance"] = list(
+                    catalogue.maintenance_actions
+                )
             for row in changed_rows:
                 record_uid = next(
                     (

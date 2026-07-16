@@ -7,14 +7,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from openpyxl import load_workbook
+
 from ..config import Settings
+from ..directory_policy import DirectoryPolicy
 from ..exceptions import FileOperationError
 from ..models import WorkflowResult
 from ..services.report_service import ReportService, append_change_log
 
 
 BACKUP_PATTERN = re.compile(
-    r"^catalogue\.backup\.\d{8}-\d{6}(?:-[A-Za-z0-9_-]+)?\.xlsx$",
+    r"^catalogue\.backup\.\d{8}-\d{6}(?:-\d{2})?\.xlsx$",
     re.IGNORECASE,
 )
 PROTECTED_NAMES = {
@@ -45,8 +48,7 @@ class CleanupCandidate:
 
 
 class CleanupWorkflow:
-    BACKUP_KEEP_COUNT = 10
-    BACKUP_KEEP_DAYS = 30
+    BACKUP_KEEP_COUNT = 5
     REPORT_KEEP_COUNT = 200
     REPORT_KEEP_DAYS = 90
     LOG_KEEP_COUNT = 5
@@ -56,6 +58,9 @@ class CleanupWorkflow:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.root = settings.library_root.resolve()
+        self.policy = DirectoryPolicy(
+            self.root, settings.reserved_root_directories
+        )
 
     def run(self, *, dry_run: bool) -> WorkflowResult:
         result = WorkflowResult(
@@ -143,13 +148,55 @@ class CleanupWorkflow:
             key=lambda path: path.stat().st_mtime_ns,
             reverse=True,
         )
-        cutoff = now - timedelta(days=self.BACKUP_KEEP_DAYS)
-        results = []
-        for index, path in enumerate(backups):
-            if index < self.BACKUP_KEEP_COUNT or self._mtime(path) >= cutoff:
+        valid_backups = []
+        for path in backups:
+            try:
+                workbook = load_workbook(path, read_only=True)
+                workbook.close()
+            except Exception:
                 continue
-            results.append(self._candidate(path, "catalogue_backup", "older_than_retention"))
+            valid_backups.append(path)
+        protected = self._protected_backup_paths()
+        results = []
+        for index, path in enumerate(valid_backups):
+            if index < self.BACKUP_KEEP_COUNT or path.resolve() in protected:
+                continue
+            results.append(
+                self._candidate(
+                    path, "catalogue_backup", "valid_backup_beyond_recent_5"
+                )
+            )
         return results
+
+    def _protected_backup_paths(self) -> set[Path]:
+        protected: set[Path] = set()
+        runs = self.settings.state_dir / "runs"
+        if not runs.is_dir():
+            return protected
+        for journal_path in runs.glob("*/operation_journal.json"):
+            try:
+                payload = json.loads(journal_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if payload.get("status") == "final_check_committed":
+                continue
+            pending = [payload]
+            while pending:
+                value = pending.pop()
+                if isinstance(value, dict):
+                    pending.extend(value.values())
+                elif isinstance(value, list):
+                    pending.extend(value)
+                elif isinstance(value, str) and "catalogue.backup." in value:
+                    candidate = Path(value)
+                    if not candidate.is_absolute():
+                        candidate = self.root / candidate.name
+                    try:
+                        candidate.resolve().relative_to(self.root)
+                    except ValueError:
+                        continue
+                    protected.add(candidate.resolve())
+        return protected
 
     def _report_candidates(self, now: datetime) -> list[CleanupCandidate]:
         directory = self.settings.reports_dir
@@ -350,6 +397,12 @@ class CleanupWorkflow:
 
     def _assert_allowed_candidate(self, candidate: CleanupCandidate) -> None:
         path = candidate.path.resolve()
+        try:
+            path.relative_to(self.policy.topics_root.resolve())
+        except ValueError:
+            pass
+        else:
+            raise FileOperationError(f"Cleanup refuses all Topics/ content: {path}")
         allowed_roots = {
             "catalogue_backup": self.root,
             "report": self.settings.reports_dir.resolve(),

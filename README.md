@@ -1,17 +1,35 @@
 # LAM — Local Archives Manager
 
 LAM provides deterministic local maintenance for a biomedical literature
-library stored alongside the source repository. Version 0.4.2 implements
+library stored alongside the source repository. Version 0.5.1 implements
 Workflow 1 (local reconciliation), Workflow 2 (network metadata lookup),
 Workflow 3 (Inbox identification and registration), and Workflow 4 (filing by
 the user-controlled `topic_folder`), including safe re-filing after a topic
-change. It also provides allowlisted maintenance cleanup.
+change. Final topic content now lives exclusively below `Topics/`; an explicit
+transactional migration upgrades legacy root-level topic directories. The CLI
+also provides a machine-readable command registry and sanitized invocation
+audit log for Agent calls. It also provides allowlisted maintenance cleanup.
 It never accesses `summary.md`.
 
 Workflow 2 queries PubMed, arXiv, and Unpaywall through synchronous,
 provider-limited clients. Responses are versioned and cached under
 `.library_state/metadata_cache`; exact identifiers take priority over titles,
 and conflicting or ambiguous identities are never written silently.
+
+```text
+ResearchLibrary/
+|-- Inbox/          # unidentified or incomplete
+|-- Registered/     # registered, awaiting topic filing
+|-- Topics/         # only namespace for final topic content
+|-- LAM_tools/      # application source
+|-- scripts/ build/ dist/
+|-- catalogue.xlsx
+`-- .library_state/ # derived state, reports, journals and invocation logs
+```
+
+`topic_folder` is relative to `Topics/` (for example `IBD/Epithelial`), while
+`pdf_relative_path` records the observed full library-relative location (for
+example `Topics/IBD/Epithelial/paper.pdf`).
 
 ## Install
 
@@ -23,6 +41,23 @@ python -m pip install -e ".[dev]"
 ```
 
 ## Commands
+
+The following table is generated from the same registry used by CLI help and
+`lam commands --json`:
+
+| Command | Category | Purpose | Dry run | Network |
+|---|---|---|---:|---:|
+| `lam check` | daily | Reconcile Catalogue and managed file state | yes | no |
+| `lam register` | daily | Identify and register Inbox papers and supplementary documents | yes | yes |
+| `lam search` | daily | Query providers and optionally update or download records | yes | yes |
+| `lam file` | daily | File or refile registered Documents under Topics/ | yes | no |
+| `lam cleanup` | maintenance | Apply allowlisted generated-file retention | yes | no |
+| `lam normalize-records` | maintenance | Canonicalize existing records by exact identifiers | yes | yes |
+| `lam repair-publication-types` | maintenance | Normalize publication types and Registered filenames | yes | no |
+| `lam migrate-topics` | maintenance | Move legacy root topic directories into Topics/ | yes | no |
+| `lam migrate-documents` | maintenance | Create Documents sheet and migrate legacy main PDFs | yes | no |
+| `lam doctor` | maintenance | Check OCR and local runtime availability | no | no |
+| `lam commands` | audit | List the public CLI command registry | no | no |
 
 ```powershell
 lam check --root D:\ResearchLibrary --dry-run
@@ -51,8 +86,14 @@ lam search --root D:\ResearchLibrary --doi 10.1000/example --download --download
 lam search --root D:\ResearchLibrary --doi 10.1000/example --download --dry-run
 lam file --root D:\ResearchLibrary --dry-run
 lam file --root D:\ResearchLibrary --json
+lam migrate-topics --root D:\ResearchLibrary --dry-run
+lam migrate-topics --root D:\ResearchLibrary --apply
+lam migrate-documents --root D:\ResearchLibrary --dry-run
+lam migrate-documents --root D:\ResearchLibrary --apply
 lam cleanup --root D:\ResearchLibrary --dry-run
 lam cleanup --root D:\ResearchLibrary --apply
+lam commands --root D:\ResearchLibrary --json
+lam check --root D:\ResearchLibrary --caller agent --json
 ```
 
 `search --dry-run` performs real provider queries and may update the metadata
@@ -68,6 +109,23 @@ overwrite to `Inbox/`. Query parameters are removed from reports. A download
 dry run selects and reports a plan but does not request the PDF or create a
 temporary file. Use `--max-download-size MB`, `--download-timeout SECONDS`, or
 `--download-source {auto,arxiv,unpaywall}` to apply narrower bounds.
+
+Version 0.5.1 separates bibliographic identity from physical files.
+`Catalogue` contains one row per paper and uses immutable `paper_uuid` values;
+`Documents` contains one row per main or supplementary file, linked by that
+UUID. Run `migrate-documents --dry-run` and then `--apply` once when upgrading
+an existing 0.5.0 workbook. Legacy `id`, `record_uid`, and `pdf_*` columns are
+retained read-only for one compatibility release; new file state is written
+only to `Documents`.
+
+After migration, Workflow 3 recognizes UUID-bound supplementary names such as
+`<paper_uuid>__table01.xlsx` and exact same-stem groups such as
+`paper.pdf` plus `paper_supp1.pdf`. Supplementary registration does not call
+Workflow 2 and does not parse spreadsheet content. It checks SHA-256,
+document ID, type/sequence, and target collisions, then writes a normalized
+filename and a file-level uncertainty only in `Documents`. Workflow 4 moves
+all Documents belonging to a paper together, including PDF, XLSX, XLS, and
+CSV files.
 
 Workflow 3 uses progressive identification and retries existing `LOCAL:` rows.
 User-confirmed identity, catalogue PMID/DOI/arXiv identifiers, PDF identifiers,
@@ -127,12 +185,25 @@ backs up `catalogue.xlsx`, normalizes all type cells, safely renames only direct
 children of `Registered/`, and runs one Workflow 1 final check.
 
 Workflow 4 accepts registered PDFs from `Registered/` and already filed PDFs
-from ordinary top-level topic folders. It trusts the Catalogue path and
-filename, does not inspect PDF content or call Workflow 2, preserves the
-filename, blocks target collisions, and runs one final check. After a successful
-topic-to-topic move it removes only the old top-level topic directory when that
-directory is truly empty; a directory containing `summary.md`, hidden files, or
-any other content is retained.
+below `Topics/`. It resolves `topic_folder` relative to `Topics/`, supports
+limited safe nesting, trusts the Catalogue path and filename, does not inspect
+PDF content or call Workflow 2, preserves the filename, blocks target
+collisions, and runs one final check. After a successful topic-to-topic move it
+removes only a truly empty old topic directory; a directory containing
+`summary.md`, hidden files, or any other content is retained.
+
+`migrate-topics --dry-run` classifies legacy root directories using Catalogue
+references and reports unknown directories without moving them. Apply mode
+moves each confirmed directory as one no-overwrite operation, carries
+`summary.md` without opening it, updates Catalogue paths atomically, records an
+operation journal, supports recovery when a directory move completed before a
+Catalogue update, and runs one final check. See
+[the 0.5.0 migration guide](MIGRATION_0.5.0.md).
+
+Every top-level CLI invocation writes one sanitized record below
+`.library_state/invocations/`. Agents pass `--caller agent`; nested workflows
+share the same `RunContext` and do not create duplicate invocation entries.
+Reports expose a common command/workflow/version/caller/status envelope.
 
 `cleanup --dry-run` reports only strictly allowlisted machine-generated
 artifacts and estimated recoverable bytes. `cleanup --apply` enforces retention
@@ -151,7 +222,8 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.4.2
+HTTP_USER_AGENT=LAM/0.5.1
+RESERVED_ROOT_DIRECTORIES=
 DOWNLOAD_ENABLED=true
 DOWNLOAD_MAX_BYTES=157286400
 DOWNLOAD_TIMEOUT_SECONDS=120
@@ -169,10 +241,12 @@ connection and at least 3.2 seconds between requests; Unpaywall uses a local
 0.25-second interval and a persistent daily counter. Temporary failures use
 bounded retries and `Retry-After` when supplied.
 
-All commands also work as `python -m lam ...`. `register` processes only direct
-PDF children of `Inbox/`, moves successful high-confidence matches only to
-`Registered/`, writes a recoverable operation journal, and runs one final
-Workflow 1 check. It never runs Workflow 4 automatically.
+All commands also work as `python -m lam ...`. `register` processes direct
+managed documents in `Inbox/`; main PDFs use progressive identification while
+recognized supplementary PDF/XLSX/XLS/CSV files use deterministic UUID or
+same-stem binding. Successful files move to `Registered/`, a recoverable
+operation journal is written, and one final Workflow 1 check runs. Workflow 4
+is never invoked automatically.
 
 A dry run may write a report and
 debug log under `.library_state`, but it does not modify the catalogue, managed

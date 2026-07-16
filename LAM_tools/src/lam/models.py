@@ -94,6 +94,16 @@ class CatalogueRecord:
 
 
 @dataclass(slots=True)
+class DocumentRecord:
+    row_number: int
+    values: dict[str, Any]
+
+    def get(self, field_name: str, default: Any = "") -> Any:
+        value = self.values.get(field_name, default)
+        return default if value is None else value
+
+
+@dataclass(slots=True)
 class FileSnapshot:
     relative_path: str
     filename: str
@@ -525,12 +535,6 @@ class MetadataLookupResult:
 
 
 @dataclass(slots=True)
-class DocumentRecord:
-    document_type: str
-    parent_catalogue_id: str | None = None
-
-
-@dataclass(slots=True)
 class FileOperation:
     operation_type: OperationType
     source: Path | None
@@ -569,6 +573,11 @@ class WorkflowResult:
     catalogue_backup: str | None = None
     state_committed: bool = False
     details: dict[str, Any] = field(default_factory=dict)
+    command: str = ""
+    version: str = ""
+    caller: str = "unknown"
+    invocation_id: str = ""
+    final_check: dict[str, Any] = field(default_factory=dict)
 
     def finalize_status(self) -> None:
         if self.failures:
@@ -585,4 +594,6 @@ class WorkflowResult:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["status"] = self.status.value
+        if self.workflow == "command_registry" and "commands" in self.details:
+            payload["commands"] = self.details["commands"]
         return payload

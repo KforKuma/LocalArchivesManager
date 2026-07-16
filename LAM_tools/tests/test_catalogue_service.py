@@ -169,3 +169,28 @@ def test_blank_bibliographic_field_can_be_filled_but_not_overwritten(library_fac
     service.update_fields(record, {"title": "Confirmed Title"})
     with pytest.raises(CatalogueError, match="non-empty bibliographic"):
         service.update_fields(record, {"title": "Conflicting Title"})
+
+
+def test_backup_retention_failure_does_not_rollback_valid_save(
+    library_factory, monkeypatch
+):
+    root = library_factory(
+        [{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}]
+    )
+    service = CatalogueService(root / "catalogue.xlsx")
+    record = service.load()[0]
+    service.update_fields(record, {"pdf_status": "registered"})
+
+    def fail_retention(*, keep: int) -> None:
+        raise OSError(f"retention failed for keep={keep}")
+
+    monkeypatch.setattr(service, "_prune_valid_backups", fail_retention)
+    backup = service.save_atomic()
+
+    assert backup is not None and backup.exists()
+    reloaded = CatalogueService(root / "catalogue.xlsx")
+    assert reloaded.load()[0].get("pdf_status") == "registered"
+    assert any(
+        item.get("action") == "catalogue_backup_cleanup_failed"
+        for item in service.maintenance_actions
+    )

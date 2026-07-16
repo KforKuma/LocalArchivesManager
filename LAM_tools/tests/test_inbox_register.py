@@ -96,6 +96,27 @@ def test_filename_match_registers_updates_catalogue_and_final_checks(library_fac
     assert second.status == WorkflowStatus.NO_CHANGES
 
 
+def test_workflow3_ignores_existing_topics_pdfs(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Already filed",
+                "topic_folder": "Existing",
+                "pdf_status": "filed",
+                "pdf_filename": "paper.pdf",
+                "pdf_relative_path": "Topics/Existing/paper.pdf",
+            }
+        ],
+        {"Topics/Existing/paper.pdf": b"paper"},
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    InboxRegisterWorkflow(settings, UnavailableMetadataService()).run(dry_run=True)
+    assert (root / "Topics" / "Existing" / "paper.pdf").exists()
+    assert not (root / "Registered" / "paper.pdf").exists()
+
+
 def test_doi_match_registers_when_filename_is_unknown(library_factory):
     root = library_factory(
         [

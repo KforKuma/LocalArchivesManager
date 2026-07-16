@@ -245,6 +245,10 @@ class PublicationTypeRepairWorkflow:
             backup = catalogue.save_atomic()
             if backup:
                 result.catalogue_backup = str(backup)
+            if catalogue.maintenance_actions:
+                result.details["backup_maintenance"] = list(
+                    catalogue.maintenance_actions
+                )
         except CatalogueError:
             for item in reversed(moved):
                 files.rollback_move(item["operation"])

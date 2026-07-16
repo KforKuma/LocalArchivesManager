@@ -26,19 +26,46 @@ def test_scan_excludes_management_directories(library_factory):
     assert [item.relative_path for item in manifest.values()] == ["Registered/paper.pdf"]
 
 
+def test_scan_includes_supported_documents_and_keeps_scope_exclusions(library_factory):
+    root = library_factory([], {"Registered/paper.pdf": b"paper"})
+    (root / "Inbox" / "supp.XLSX").write_bytes(b"xlsx")
+    (root / "Registered" / "data.CsV").write_bytes(b"csv")
+    (root / "Registered" / "ignored.txt").write_bytes(b"text")
+    (root / "Registered" / ".hidden.xls").write_bytes(b"hidden")
+    (root / "Inbox" / "nested").mkdir()
+    (root / "Inbox" / "nested" / "nested.csv").write_bytes(b"nested")
+    (root / "Topics" / "Topic_A" / "Nested").mkdir(parents=True)
+    (root / "Topics" / "Topic_A" / "table.xls").write_bytes(b"xls")
+    (root / "Topics" / "Topic_A" / "Nested" / "figure.PDF").write_bytes(b"pdf")
+    (root / "Topics" / "Topic_A" / ".hidden.csv").write_bytes(b"hidden")
+    (root / "Topics" / ".hidden" / "hidden.xlsx").parent.mkdir()
+    (root / "Topics" / ".hidden" / "hidden.xlsx").write_bytes(b"hidden")
+    (root / "root_table.csv").write_bytes(b"root")
+
+    manifest = SnapshotService(root, root / ".library_state").scan()
+
+    assert {item.relative_path for item in manifest.values()} == {
+        "Inbox/supp.XLSX",
+        "Registered/data.CsV",
+        "Registered/paper.pdf",
+        "Topics/Topic_A/Nested/figure.PDF",
+        "Topics/Topic_A/table.xls",
+    }
+
+
 def test_move_is_detected_by_quick_hash(library_factory):
     root = library_factory([], {"Registered/paper.pdf": b"same"})
     service = SnapshotService(root, root / ".library_state")
     previous = service.scan()
-    (root / "Topic_A").mkdir()
-    os.replace(root / "Registered" / "paper.pdf", root / "Topic_A" / "paper.pdf")
+    (root / "Topics" / "Topic_A").mkdir()
+    os.replace(root / "Registered" / "paper.pdf", root / "Topics" / "Topic_A" / "paper.pdf")
     current = service.scan(previous)
     diffs, unchanged = service.compare(previous, current)
     assert unchanged == 0
     assert len(diffs) == 1
     assert diffs[0].diff_type == DiffType.MOVED_OR_RENAMED
     assert diffs[0].old_path == "Registered/paper.pdf"
-    assert diffs[0].new_path == "Topic_A/paper.pdf"
+    assert diffs[0].new_path == "Topics/Topic_A/paper.pdf"
 
 
 def test_same_path_content_change_is_modified(library_factory):
@@ -56,9 +83,9 @@ def test_same_filename_move_remains_identity_when_content_changes(library_factor
     root = library_factory([], {"Registered/paper.pdf": b"old"})
     service = SnapshotService(root, root / ".library_state")
     previous = service.scan()
-    (root / "Topic_A").mkdir()
+    (root / "Topics" / "Topic_A").mkdir()
     old = root / "Registered" / "paper.pdf"
-    new = root / "Topic_A" / "paper.pdf"
+    new = root / "Topics" / "Topic_A" / "paper.pdf"
     old.replace(new)
     new.write_bytes(b"%PDF-1.4\nchanged and larger\n%%EOF\n")
     current = service.scan(previous)
@@ -81,7 +108,38 @@ def test_snapshot_generation_is_committed_with_one_marker(library_factory):
     ):
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["_state"]["generation_id"] == generation
+    manifest_payload = json.loads(service.file_manifest_path.read_text(encoding="utf-8"))
+    assert manifest_payload["version"] == 2
     assert service.load_manifest()
+
+
+def test_load_manifest_accepts_legacy_version_one(library_factory):
+    root = library_factory([])
+    service = SnapshotService(root, root / ".library_state")
+    service.state_dir.mkdir(parents=True)
+    service.file_manifest_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "files": [
+                    {
+                        "relative_path": "Registered/legacy.pdf",
+                        "filename": "legacy.pdf",
+                        "size": 12,
+                        "mtime_ns": 34,
+                        "quick_hash": "legacy-quick-hash",
+                        "full_hash": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = service.load_manifest()
+
+    assert list(manifest) == ["registered/legacy.pdf"]
+    assert manifest["registered/legacy.pdf"].filename == "legacy.pdf"
 
 
 def test_incomplete_first_generation_is_never_accepted(library_factory, monkeypatch):
@@ -152,7 +210,7 @@ def test_committed_journal_move_is_expected_not_collision(library_factory):
     service = SnapshotService(root, root / ".library_state")
     previous = service.scan()
     source = root / "Registered" / "old.pdf"
-    target = root / "Topic_A" / "new.pdf"
+    target = root / "Topics" / "Topic_A" / "new.pdf"
     journal = OperationJournal.create(
         root / ".library_state",
         [
@@ -213,3 +271,117 @@ def test_same_quick_hash_with_different_full_hash_is_not_collision(library_facto
     diffs, _ = service.compare(previous, current)
     assert DiffType.POSSIBLE_COLLISION not in [item.diff_type for item in diffs]
     assert DiffType.ADDED in [item.diff_type for item in diffs]
+
+
+def test_compare_catalogue_matches_documents_by_document_id():
+    previous = {
+        "rows": [],
+        "documents": [
+            {
+                "row_number": 2,
+                "document_id": "paper-uuid:main",
+                "paper_uuid": "paper-uuid",
+                "fields": {
+                    "document_id": "paper-uuid:main",
+                    "paper_uuid": "paper-uuid",
+                    "filename": "old.pdf",
+                },
+            },
+            {
+                "row_number": 3,
+                "document_id": "paper-uuid:supp:table:01",
+                "paper_uuid": "paper-uuid",
+                "fields": {
+                    "document_id": "paper-uuid:supp:table:01",
+                    "paper_uuid": "paper-uuid",
+                    "filename": "table01.csv",
+                },
+            },
+        ],
+    }
+    current = {
+        "rows": [],
+        "documents": [
+            {
+                "row_number": 8,
+                "document_id": "paper-uuid:main",
+                "paper_uuid": "paper-uuid",
+                "fields": {
+                    "document_id": "paper-uuid:main",
+                    "paper_uuid": "paper-uuid",
+                    "filename": "new.pdf",
+                },
+            },
+            {
+                "row_number": 9,
+                "document_id": "paper-uuid:supp:figure:01",
+                "paper_uuid": "paper-uuid",
+                "fields": {
+                    "document_id": "paper-uuid:supp:figure:01",
+                    "paper_uuid": "paper-uuid",
+                    "filename": "figure01.pdf",
+                },
+            },
+        ],
+    }
+
+    changes = SnapshotService.compare_catalogue(previous, current)
+
+    assert changes == [
+        {
+            "sheet": "Documents",
+            "row_number": 8,
+            "document_id": "paper-uuid:main",
+            "paper_uuid": "paper-uuid",
+            "change": "field_changed",
+            "field": "filename",
+            "old": "old.pdf",
+            "new": "new.pdf",
+        },
+        {
+            "sheet": "Documents",
+            "row_number": 3,
+            "document_id": "paper-uuid:supp:table:01",
+            "paper_uuid": "paper-uuid",
+            "change": "row_missing",
+        },
+        {
+            "sheet": "Documents",
+            "row_number": 9,
+            "document_id": "paper-uuid:supp:figure:01",
+            "paper_uuid": "paper-uuid",
+            "change": "row_added",
+        },
+    ]
+
+
+def test_compare_catalogue_keeps_record_uid_matching_compatibility():
+    previous = {
+        "rows": [
+            {
+                "row_number": 2,
+                "record_uid": "stable-record-uid",
+                "fields": {"record_uid": "stable-record-uid", "title": "Old"},
+            }
+        ]
+    }
+    current = {
+        "rows": [
+            {
+                "row_number": 20,
+                "record_uid": "stable-record-uid",
+                "fields": {"record_uid": "stable-record-uid", "title": "New"},
+            }
+        ]
+    }
+
+    assert SnapshotService.compare_catalogue(previous, current) == [
+        {
+            "row_number": 20,
+            "record_uid": "stable-record-uid",
+            "change": "field_changed",
+            "field": "title",
+            "old": "Old",
+            "new": "New",
+        }
+    ]

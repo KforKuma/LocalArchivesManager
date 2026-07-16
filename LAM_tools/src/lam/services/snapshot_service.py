@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..directory_policy import DirectoryPolicy, RootDirectoryKind
 from ..exceptions import FileOperationError
 from ..models import DiffType, FileDiff, FileSnapshot
 from ..services.journal_service import completed_file_movements
@@ -16,22 +17,21 @@ from ..utils.hashing import full_hash, quick_hash
 from ..utils.normalize import normalized_relative_path, normalized_text
 
 
-EXCLUDED_DIRECTORIES = {
-    ".agents",
-    ".codex",
-    ".git",
-    ".idea",
-    ".library_state",
-    "__pycache__",
-    "lam_tools",
-    "scripts",
-}
+MANIFEST_VERSION = 2
+SUPPORTED_MANIFEST_VERSIONS = {None, 1, MANIFEST_VERSION}
+MANAGED_DOCUMENT_EXTENSIONS = frozenset({".pdf", ".xlsx", ".xls", ".csv"})
 
 
 class SnapshotService:
-    def __init__(self, library_root: Path, state_dir: Path):
-        self.library_root = library_root
+    def __init__(
+        self,
+        library_root: Path,
+        state_dir: Path,
+        extra_reserved: tuple[str, ...] = (),
+    ):
+        self.library_root = library_root.resolve()
         self.state_dir = state_dir
+        self.policy = DirectoryPolicy(self.library_root, extra_reserved)
         self.catalogue_snapshot_path = state_dir / "catalogue_snapshot.json"
         self.file_manifest_path = state_dir / "file_manifest.json"
         self.last_diff_path = state_dir / "last_diff.json"
@@ -55,6 +55,18 @@ class SnapshotService:
         if not path.is_file():
             return {}
         payload = self._load_json(path)
+        version = payload.get("version")
+        if not (
+            version is None
+            or (
+                isinstance(version, int)
+                and not isinstance(version, bool)
+                and version in SUPPORTED_MANIFEST_VERSIONS
+            )
+        ):
+            raise FileOperationError(
+                f"Unsupported file manifest version {version!r}: {path}"
+            )
         entries = payload.get("files", [])
         return {
             normalized_relative_path(item["relative_path"]): FileSnapshot(**item)
@@ -106,9 +118,7 @@ class SnapshotService:
         previous = previous or {}
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         current: dict[str, FileSnapshot] = {}
-        for path in self.library_root.rglob("*.pdf"):
-            if self._excluded(path):
-                continue
+        for path in self._managed_document_paths():
             relative = path.relative_to(self.library_root).as_posix()
             key = normalized_relative_path(relative)
             stat = path.stat()
@@ -132,12 +142,86 @@ class SnapshotService:
             )
         return current
 
-    def _excluded(self, path: Path) -> bool:
-        relative_parts = path.relative_to(self.library_root).parts[:-1]
-        return any(
-            part.startswith(".") or part.casefold() in EXCLUDED_DIRECTORIES
-            for part in relative_parts
-        )
+    def _managed_document_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        for directory in (self.library_root / "Inbox", self.library_root / "Registered"):
+            if not directory.is_dir():
+                continue
+            paths.extend(
+                path
+                for path in directory.iterdir()
+                if (
+                    path.is_file()
+                    and path.suffix.casefold() in MANAGED_DOCUMENT_EXTENSIONS
+                    and not path.name.startswith(".")
+                    and not path.is_symlink()
+                    and not self._is_reparse_point(path)
+                )
+            )
+        topics = self.policy.topics_root
+        if topics.is_dir():
+            for path in topics.rglob("*"):
+                if (
+                    not path.is_file()
+                    or path.suffix.casefold() not in MANAGED_DOCUMENT_EXTENSIONS
+                ):
+                    continue
+                try:
+                    relative = path.relative_to(topics)
+                except ValueError:
+                    continue
+                if (
+                    len(relative.parts) < 2
+                    or any(part.startswith(".") for part in relative.parts)
+                    or path.is_symlink()
+                    or self._is_reparse_point(path)
+                    or any(
+                        parent.is_symlink() or self._is_reparse_point(parent)
+                        for parent in path.parents
+                        if parent != topics and topics in parent.parents
+                    )
+                ):
+                    continue
+                paths.append(path)
+        return sorted(set(paths), key=lambda path: path.as_posix().casefold())
+
+    # Kept as a private compatibility alias for callers/tests from pre-0.5.1.
+    def _managed_pdf_paths(self) -> list[Path]:
+        return [
+            path
+            for path in self._managed_document_paths()
+            if path.suffix.casefold() == ".pdf"
+        ]
+
+    @staticmethod
+    def _is_reparse_point(path: Path) -> bool:
+        try:
+            attributes = getattr(path.stat(), "st_file_attributes", 0)
+        except OSError:
+            return True
+        return bool(attributes & 0x400)
+
+    def root_items(
+        self,
+        referenced_legacy_roots: set[str],
+    ) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        for path in sorted(self.library_root.iterdir(), key=lambda item: item.name.casefold()):
+            if path.is_file():
+                if path.suffix.casefold() == ".pdf":
+                    items.append({"path": path.name, "classification": "unmanaged_item"})
+                continue
+            if not path.is_dir():
+                continue
+            kind = self.policy.classify_root_directory(
+                path,
+                referenced_legacy_roots=referenced_legacy_roots,
+            )
+            if kind == RootDirectoryKind.LEGACY_TOPIC_CANDIDATE:
+                items.append({"path": path.name, "classification": "legacy_topic_location"})
+            elif kind == RootDirectoryKind.UNKNOWN:
+                items.append({"path": path.name, "classification": "unmanaged_item"})
+        return items
 
     def compare(
         self,
@@ -406,6 +490,90 @@ class SnapshotService:
                         "change": "row_added",
                     }
                 )
+        old_documents = list(previous.get("documents", []))
+        new_documents = list(current.get("documents", []))
+        old_documents_by_id = {
+            normalized_text(
+                row.get("document_id") or row.get("fields", {}).get("document_id")
+            ): index
+            for index, row in enumerate(old_documents)
+            if normalized_text(
+                row.get("document_id") or row.get("fields", {}).get("document_id")
+            )
+        }
+        new_documents_by_id = {
+            normalized_text(
+                row.get("document_id") or row.get("fields", {}).get("document_id")
+            ): index
+            for index, row in enumerate(new_documents)
+            if normalized_text(
+                row.get("document_id") or row.get("fields", {}).get("document_id")
+            )
+        }
+        matched_old_documents: set[int] = set()
+        matched_new_documents: set[int] = set()
+        for document_id in old_documents_by_id.keys() & new_documents_by_id.keys():
+            old_index = old_documents_by_id[document_id]
+            new_index = new_documents_by_id[document_id]
+            matched_old_documents.add(old_index)
+            matched_new_documents.add(new_index)
+            old_row = old_documents[old_index]
+            new_row = new_documents[new_index]
+            old_fields = old_row.get("fields", {})
+            new_fields = new_row.get("fields", {})
+            if old_fields == new_fields:
+                continue
+            for field_name in sorted(old_fields.keys() | new_fields.keys()):
+                if old_fields.get(field_name) == new_fields.get(field_name):
+                    continue
+                changes.append(
+                    {
+                        "sheet": "Documents",
+                        "row_number": new_row.get("row_number"),
+                        "document_id": new_row.get("document_id")
+                        or new_fields.get("document_id")
+                        or old_row.get("document_id")
+                        or old_fields.get("document_id"),
+                        "paper_uuid": new_row.get("paper_uuid")
+                        or new_fields.get("paper_uuid")
+                        or old_row.get("paper_uuid")
+                        or old_fields.get("paper_uuid"),
+                        "change": "field_changed",
+                        "field": field_name,
+                        "old": old_fields.get(field_name),
+                        "new": new_fields.get(field_name),
+                    }
+                )
+        for index, row in enumerate(old_documents):
+            if index in matched_old_documents:
+                continue
+            fields = row.get("fields", {})
+            changes.append(
+                {
+                    "sheet": "Documents",
+                    "row_number": row.get("row_number"),
+                    "document_id": row.get("document_id")
+                    or fields.get("document_id"),
+                    "paper_uuid": row.get("paper_uuid")
+                    or fields.get("paper_uuid"),
+                    "change": "row_missing",
+                }
+            )
+        for index, row in enumerate(new_documents):
+            if index in matched_new_documents:
+                continue
+            fields = row.get("fields", {})
+            changes.append(
+                {
+                    "sheet": "Documents",
+                    "row_number": row.get("row_number"),
+                    "document_id": row.get("document_id")
+                    or fields.get("document_id"),
+                    "paper_uuid": row.get("paper_uuid")
+                    or fields.get("paper_uuid"),
+                    "change": "row_added",
+                }
+            )
         return changes
 
     def commit(
@@ -427,7 +595,7 @@ class SnapshotService:
         }
         catalogue_payload = {**catalogue_snapshot, "_state": state_meta}
         manifest_payload = {
-            "version": 1,
+            "version": MANIFEST_VERSION,
             "files": [asdict(item) for _, item in sorted(manifest.items())],
             "_state": state_meta,
         }

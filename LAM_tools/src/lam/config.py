@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .exceptions import ConfigurationError
+from .directory_policy import parse_reserved_root_directories
 
 
 def _load_optional_dotenv(project_root: Path) -> None:
@@ -45,7 +46,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.4.2"
+    user_agent: str = "LAM/0.5.1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +131,8 @@ class Settings:
     logs_dir: Path
     inbox_dir: Path
     registered_dir: Path
+    topics_dir: Path
+    invocations_dir: Path
     changes_log_path: Path
     lock_path: Path
     max_filename_length: int = 180
@@ -151,6 +154,7 @@ class Settings:
     download_temp_dir: Path | None = None
     ocr: OcrConfig = field(default_factory=OcrConfig)
     ocr_cache_dir: Path | None = None
+    reserved_root_directories: tuple[str, ...] = ()
 
     @classmethod
     def from_root(cls, root: str | Path | None = None) -> "Settings":
@@ -171,7 +175,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.4.2").strip() or "LAM/0.4.2",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.1").strip() or "LAM/0.5.1",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
@@ -251,6 +255,8 @@ class Settings:
             logs_dir=library_root / ".library_state" / "logs",
             inbox_dir=library_root / "Inbox",
             registered_dir=library_root / "Registered",
+            topics_dir=library_root / "Topics",
+            invocations_dir=library_root / ".library_state" / "invocations",
             changes_log_path=library_root / "library_changes.md",
             lock_path=library_root / ".library_state" / "lam.lock",
             metadata_cache_dir=library_root / ".library_state" / "metadata_cache",
@@ -262,9 +268,13 @@ class Settings:
             download_temp_dir=library_root / ".library_state" / "tmp",
             ocr=ocr,
             ocr_cache_dir=library_root / ".library_state" / "ocr_cache",
+            reserved_root_directories=parse_reserved_root_directories(
+                os.getenv("RESERVED_ROOT_DIRECTORIES")
+            ),
         )
 
     def ensure_runtime_directories(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.invocations_dir.mkdir(parents=True, exist_ok=True)

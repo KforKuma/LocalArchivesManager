@@ -86,3 +86,51 @@ def test_dry_run_does_not_create_official_snapshots_or_modify_catalogue(library_
     assert not (root / ".library_state" / "file_manifest.json").exists()
     assert not list(root.glob("catalogue.backup.*.xlsx"))
 
+
+def test_daily_check_reports_legacy_topic_without_scanning_unknown_roots(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Legacy",
+                "topic_folder": "Topic_A",
+                "pdf_status": "filed",
+                "pdf_filename": "paper.pdf",
+                "pdf_relative_path": "Topic_A/paper.pdf",
+            }
+        ],
+        {
+            "Topic_A/paper.pdf": b"legacy",
+            "Unknown/other.pdf": b"unmanaged",
+            "Topics/Managed/managed.pdf": b"managed",
+        },
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = DailyCheckWorkflow(settings).run(dry_run=True)
+    assert any(item.get("issue") == "legacy_topic_location" for item in result.needs_review)
+    assert result.counts["managed_pdfs"] == 1
+    unmanaged = result.details["unmanaged_items"]
+    assert {item["path"] for item in unmanaged} >= {"Topic_A", "Unknown"}
+
+
+def test_filed_status_requires_topics_relative_topic_match(library_factory):
+    root = library_factory(
+        [
+            {
+                "id": "P1",
+                "title": "Nested",
+                "topic_folder": "IBD/Epithelial",
+                "pdf_status": "filed",
+                "pdf_filename": "paper.pdf",
+                "pdf_relative_path": "Topics/IBD/Epithelial/paper.pdf",
+            }
+        ],
+        {"Topics/IBD/Epithelial/paper.pdf": b"paper"},
+    )
+    settings = Settings.from_root(root)
+    settings.ensure_runtime_directories()
+    result = DailyCheckWorkflow(settings).run()
+    assert result.status == WorkflowStatus.SUCCESS
+    workbook = load_workbook(root / "catalogue.xlsx")
+    assert workbook["Catalogue"]["H2"].value == "filed"

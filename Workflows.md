@@ -11,11 +11,11 @@ The global safety, authorization, field-ownership, and `uncertainty` rules in `A
 ## Managed file lifecycle
 
 ```text
-new or manually downloaded PDF
+new or manually downloaded main PDF / supplementary document
         ↓
       Inbox/
         ↓
-Workflow 3: identify, register, rename
+Workflow 3: identify, bind, register, rename
         ↓
    Registered/
         ↓
@@ -23,16 +23,35 @@ manual review of catalogue.xlsx
         ↓
 Workflow 4: file by topic_folder
         ↓
-   Topic folders
+   Topics/<topic_folder>/
 ```
+
+Since 0.5.1, `Catalogue` is the paper table and `Documents` is the physical
+file table. Every paper has an immutable `paper_uuid`; every file has a stable
+`document_id`. Main and supplementary PDF/XLSX/XLS/CSV files share the same
+paper UUID. The legacy `pdf_*` Catalogue columns are read-only compatibility
+fields and are no longer the file-state source of truth after migration.
+
+Upgrade an existing workbook with:
+
+```powershell
+lam migrate-documents --root D:\ResearchLibrary --dry-run
+lam migrate-documents --root D:\ResearchLibrary --apply
+```
+
+Modifying commands run Catalogue preflight before network/PDF/OCR work and
+repeat the concurrency check before commit. Workflow 3 classifies UUID and
+same-stem supplementary files before the main-PDF identification chain.
+Workflow 1 reconciles each managed file against `Documents`; Workflow 4 moves
+all Documents sharing a paper UUID in one group.
 
 Directory meanings:
 
 - `Inbox/`: identification or registration is incomplete.
 - `Registered/`: identification and standard naming are complete, but final filing is incomplete.
-- Topic folders: final locations controlled by `topic_folder`.
+- `Topics/`: the only parent for final locations controlled by `topic_folder`.
 
-Recommended `pdf_status` values:
+Recommended `Documents.file_status` values:
 
 ```text
 not_downloaded
@@ -43,31 +62,34 @@ missing
 unclear
 ```
 
-Recommended location fields:
+Current location fields in `Documents`:
 
 ```text
-pdf_filename
-pdf_relative_path
-topic_folder
+filename
+relative_path
+file_status
 ```
 
 Interpretation:
 
-- `pdf_filename`: current filename only.
-- `pdf_relative_path`: currently observed relative path.
-- `topic_folder`: user-confirmed intended final folder.
+- `filename`: current filename only.
+- `relative_path`: currently observed library-relative path.
+- `Catalogue.topic_folder`: user-confirmed intended path relative to `Topics/`; it must
+  not contain a leading `Topics/`, an absolute path, `..`, hidden components,
+  or reserved directory names. Limited nesting is allowed.
 
-If `pdf_relative_path` is missing from `catalogue.xlsx`, propose adding it before automated location maintenance.
+Legacy `pdf_filename`, `pdf_relative_path`, and `pdf_status` fields may remain
+read-only during the compatibility release. After migration, workflows must
+not use them as the source of current file state.
 
 ---
 
-## Recommended catalogue schema
+## Workbook schema
 
-The catalogue should contain one row per paper.
+`Catalogue` contains exactly one row per paper:
 
 ```text
-id
-record_uid
+paper_uuid
 title
 authors
 year
@@ -75,43 +97,56 @@ journal
 journal_abbrev
 doi
 pmid
+arxiv_id
 publication_type
 abstract
 keywords
-auto_tags
 manual_tags
+auto_tags
 suggested_topic
 topic_folder
-pdf_status
-pdf_filename
-pdf_relative_path
 source
-date_added
-date_updated
 notes
 uncertainty
+date_added
+date_updated
 ```
 
-Do not remove existing columns.
-
-`record_uid` is an immutable machine UUID for stable row association. `id` is
-the user-facing paper identifier and may be upgraded by priority:
+`Documents` contains exactly one row per managed physical file:
 
 ```text
-PMID:<pmid> > DOI:<doi> > ARXIV:<arxiv_id> > LOCAL:<uuid>
+document_id
+paper_uuid
+document_type
+supplementary_type
+sequence
+filename
+relative_path
+extension
+sha256
+file_status
+source
+uncertainty
+date_added
+date_updated
 ```
 
-Snapshots, review decisions, and new operation journals prefer `record_uid`
-and retain row-number compatibility for pre-0.4.1 state.
+`paper_uuid` is the immutable internal paper identity. PMID, DOI, and arXiv ID
+are external identifiers only. A paper has at most one `main` document and may
+have multiple `supplementary` documents. `document_id` is stable and unique.
 
-Duplicate detection order:
+Existing legacy columns may remain for one read-only compatibility release,
+but new file state is written only to `Documents`.
 
-1. PMID
-2. DOI
-3. exact normalized title
-4. fuzzy title match with supporting metadata
+Duplicate paper detection order is:
 
-A probable duplicate should update missing fields in the existing row rather than create a second row. If duplicate status remains uncertain, preserve both possibilities and add `NEEDS_REVIEW:`.
+```text
+PMID exact > DOI exact > arXiv exact > high-confidence title + author/year
+```
+
+Exact file duplication is determined by SHA-256. Confirmed duplicates remain
+in `Inbox/`, create no new paper or document row, and are reported as one
+file-level blocker without contaminating paper-level uncertainty.
 
 ---
 
@@ -187,6 +222,12 @@ __pycache__/
 
 Never inspect `summary.md`.
 
+Root-level PDFs and unknown ordinary root directories are reported as
+`unmanaged_items` and are not scanned recursively. A Catalogue-referenced PDF
+in a historical root-level topic directory is reported as
+`legacy_topic_location`; ordinary workflows do not move it or create new
+root-level topic directories. Run `migrate-topics` explicitly to convert it.
+
 ---
 
 ## Mode A: Initial reconciliation
@@ -194,7 +235,7 @@ Never inspect `summary.md`.
 Use this mode when either required snapshot does not exist.
 
 1. Read `catalogue.xlsx`.
-2. Scan managed PDF locations: `Inbox/`, `Registered/`, and topic folders.
+2. Scan only `Inbox/*.pdf`, `Registered/*.pdf`, and `Topics/**/*.pdf`.
 3. Match catalogue rows to observed PDFs using identifiers, filename, and path information.
 4. Update only objectively determinable fields such as:
    - `pdf_status`;
@@ -873,19 +914,20 @@ A request to run Workflow 4 authorizes routine high-confidence file movements ba
 ## Purpose
 
 1. Compare intended `topic_folder` values with observed `pdf_relative_path` values.
-2. Move eligible PDFs from `Registered/` or an ordinary top-level topic folder
-   into their confirmed topic folder.
+2. Move eligible PDFs from `Registered/` or an existing path below `Topics/`
+   into `Topics/<topic_folder>/`.
 3. Update location and lifecycle fields.
 4. Leave unresolved or unclassified files in place.
-5. Remove the old ordinary top-level topic folder only when it becomes truly empty.
+5. Remove the old directory below `Topics/` only when it becomes truly empty.
 
 Workflow 4 handles location only.
 
 Workflow 4 must never move files from `Inbox/`. Files in `Inbox/` remain under
 Workflow 2/3 authority. It accepts only catalogue-registered direct PDF children
-of `Registered/` or ordinary top-level topic directories. It rejects hidden and
-management directories, `LAM_tools/`, `scripts/`, `build/`, `dist/`, nested
-paths, non-PDF files, and paths outside the library root.
+of `Registered/` or visible PDF descendants of `Topics/`. It rejects legacy
+root-level topic locations, hidden and management directories, non-PDF files,
+and paths outside the library root. Legacy locations are reported with
+`legacy_topic_location` and must be handled by `migrate-topics`.
 
 It must not:
 
@@ -946,8 +988,9 @@ If `topic_folder` is empty or `Unclassified`:
 
 A missing target folder may be created without a second confirmation only when:
 
-- its exact name is already present in the user-controlled `topic_folder` field;
-- the path is a direct safe child of the library root;
+- its exact relative path is already present in the user-controlled
+  `topic_folder` field;
+- the resolved path remains below `Topics/`;
 - it does not contain traversal components or unsafe path syntax;
 - it is not suspiciously similar to an existing folder in a way that suggests a typo.
 
@@ -959,16 +1002,16 @@ Do not merge folders.
 
 ## Re-filing and old-folder cleanup
 
-When an eligible PDF is already in an ordinary top-level topic folder and that
-folder differs from `topic_folder`, classify the successful move as
+When an eligible PDF is already below `Topics/` and its current topic path
+differs from `topic_folder`, classify the successful move as
 `refiled_from_topic`. A successful move from `Registered/` is
 `filed_from_registered`.
 
-After a topic-to-topic move, check only the old top-level directory. Remove it
+After a topic-to-topic move, check only the old topic directory. Remove it
 with a non-recursive empty-directory operation only if it is truly empty. Keep
 it when it contains `summary.md`, a hidden entry, or any other content. Never
-remove `Inbox/`, `Registered/`, `LAM_tools/`, `scripts/`, `build/`, `dist/`, a
-hidden/management directory, a nested directory, or a path outside the root.
+remove `Topics/` itself, `Inbox/`, `Registered/`, a hidden/management
+directory, or a path outside the root.
 Record every removed empty directory in the operation journal and report.
 
 Per-record result classifications are:
@@ -1012,6 +1055,76 @@ Empty old topic directories removed:
 ```
 
 After Workflow 4 finishes, run Workflow 1 once in final-check mode.
+
+---
+
+# Maintenance workflow: Topics namespace migration
+
+## Trigger
+
+Run only when explicitly requested:
+
+```text
+lam migrate-topics --dry-run
+lam migrate-topics --apply
+```
+
+Ordinary workflows must never trigger this structural migration implicitly.
+Dry run produces a complete plan without modifying directories, Catalogue,
+official snapshots, operation journals, or the change log.
+
+## Candidate classification
+
+The centralized root-directory policy reserves `Inbox`, `Registered`,
+`Topics`, `LAM_tools`, `scripts`, `build`, `dist`, `__pycache__`, hidden and
+management directories, plus names configured through
+`RESERVED_ROOT_DIRECTORIES`.
+
+An ordinary root directory is a legacy topic candidate only when Catalogue
+`topic_folder`/`pdf_relative_path` references it, it contains a PDF registered
+by Catalogue, or the user explicitly supplies `--include-topic`. A directory
+that merely contains a PDF is not sufficient. Unknown directories are reported
+without movement.
+
+## Apply behavior and recovery
+
+For each confirmed candidate, move the whole directory from
+`Root/<topic>` to `Root/Topics/<topic>` through the file service. Moving the
+directory carries `summary.md` opaquely without reading or modifying it.
+Revalidate registered PDF size, mtime, and quick fingerprint immediately before
+the no-overwrite directory move.
+
+If the target exists and is empty, it may be replaced by the directory entry.
+If it contains anything, block the candidate without merging or overwriting.
+Update legacy `pdf_relative_path` values with the leading `Topics/`; keep a
+relative `topic_folder` unchanged and normalize only the historical equivalent
+`Topics/<topic>` form.
+
+Use the global CLI lock, operation journal, atomic Catalogue backup/write,
+rollback before Catalogue commit, change log, and one final Workflow 1 check.
+If a prior interruption already moved the directory but did not update
+Catalogue, a rerun detects `Topics/<topic>` and completes the Catalogue phase.
+The final check refreshes the committed snapshot generation.
+
+---
+
+# CLI execution and invocation audit
+
+Every public CLI command uses one top-level `RunContext` containing the
+invocation ID, caller, root, dry-run state, lock state, top-level command, and
+final-check permission. Nested workflows reuse that context: they do not
+acquire a second CLI lock, create another invocation entry, or independently
+authorize a duplicate final check.
+
+Agent calls pass `--caller agent`. One sanitized JSONL record is appended to
+`.library_state/invocations/YYYY-MM.jsonl`; it contains command arguments,
+status, exit code, report link, change counts, and duration, but never API keys,
+`.env` contents, PDF/OCR text, or private reasoning.
+
+`lam commands --json` exposes the single public command registry used for CLI
+help and documentation. Every public JSON report receives the common envelope:
+`command`, `workflow`, `version`, `caller`, `status`, `dry_run`, result lists,
+`final_check`, and `invocation_id`.
 
 ---
 

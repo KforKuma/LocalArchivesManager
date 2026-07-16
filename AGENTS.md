@@ -8,36 +8,46 @@ Your job is to maintain a local biomedical literature library with minimal repea
 
 Before performing any library task, read `Workflows.md` and follow the relevant workflow.
 
+For standard library operations, invoke the public LAM CLI instead of
+reimplementing an existing command. Agent-originated calls must pass
+`--caller agent`. Do not use temporary Python scripts to replace available CLI
+behavior, edit `.library_state/` directly, move/rename/delete PDFs directly, or
+directly edit machine-owned Catalogue fields. The Agent selects commands and
+explains results; LAM performs deterministic execution. If a command returns
+`needs_review`, summarize the consolidated issues without repeating the
+underlying operation.
+
 ---
 
 ## Repository structure
 
 ```text
 Root/
-├── AGENTS.md
-├── Workflows.md
-├── catalogue.xlsx
-├── library_changes.md
-├── .library_state/
-│   ├── catalogue_snapshot.json
-│   ├── file_manifest.json
-│   └── last_diff.json
-├── Inbox/
-├── Registered/
-├── Topic_A/
-│   ├── summary.md
-│   └── PDFs...
-├── Topic_B/
-│   ├── summary.md
-│   └── PDFs...
-└── ...
+|-- AGENTS.md
+|-- Workflows.md
+|-- catalogue.xlsx
+|-- library_changes.md
+|-- Inbox/
+|-- Registered/
+|-- Topics/
+|   |-- Topic_A/
+|   |   |-- summary.md
+|   |   `-- PDFs...
+|   `-- Topic_B/
+|-- LAM_tools/
+|-- scripts/
+|-- build/
+|-- dist/
+`-- .library_state/
 ```
 
 Directory meanings:
 
 - `Inbox/`: newly introduced files that have not completed identification and registration.
 - `Registered/`: files that have been matched to `catalogue.xlsx`, given a safe standard filename, and registered, but have not yet been filed by `topic_folder`.
-- Topic folders: final PDF locations controlled by the confirmed `topic_folder` value in `catalogue.xlsx`.
+- `Topics/`: the only parent namespace for final topic folders. `topic_folder`
+  stores a path relative to this directory, while `pdf_relative_path` includes
+  the leading `Topics/` component.
 - `.library_state/`: machine-maintained derived state used for incremental comparison. It is not a user-facing source of truth.
 
 ---
@@ -64,7 +74,7 @@ Interpretation:
 1. Never delete user or library files. Only an explicitly requested
    `lam cleanup --apply` may delete strictly allowlisted machine-generated
    artifacts under its documented retention rules; Workflow 4 may remove only
-   a truly empty ordinary top-level topic directory after moving its last PDF.
+   a truly empty directory below `Topics/` after moving its last PDF.
 2. Never overwrite a PDF with different content.
 3. Never overwrite user-written notes, tags, classifications, or confirmations.
 4. Never silently resolve low-confidence matches or conflicting metadata.
@@ -85,10 +95,12 @@ You must not:
 
 - read or inspect `summary.md`;
 - use it for PDF matching or classification;
-- modify, move, merge, validate, summarize, or reorganize it;
+- modify, merge, validate, summarize, or reorganize it;
 - infer catalogue metadata from it.
 
-The presence or contents of `summary.md` must not affect any workflow.
+The presence or contents of `summary.md` must not affect any workflow. The
+explicit `migrate-topics` command may carry it as an opaque member of a whole
+directory move, without opening or changing it.
 
 ---
 
@@ -105,6 +117,10 @@ notes
 ```
 
 User-authored entries in `uncertainty` are also protected.
+
+The sole structural exception is explicit `migrate-topics --apply`, which may
+normalize historical `topic_folder = Topics/<path>` to the semantically
+equivalent `<path>`; it must not otherwise change the user's classification.
 
 ### Machine identity fields
 
@@ -209,9 +225,12 @@ This means:
 
 - Workflow 2 may update eligible metadata and perform an explicitly requested download.
 - Workflow 3 may rename successfully identified files and move them from `Inbox/` to `Registered/`.
-- Workflow 4 may move registered files from `Registered/` or ordinary top-level
-  topic directories according to confirmed `topic_folder` values, and may
-  remove only a truly empty old topic directory.
+- Workflow 4 may move registered files from `Registered/` or existing paths
+  below `Topics/` according to confirmed `topic_folder` values, and may remove
+  only a truly empty old topic directory below `Topics/`.
+- An explicit `lam migrate-topics --apply` may move confirmed legacy root topic
+  directories into `Topics/`, normalize legacy paths, and remove only the now
+  empty legacy directory entry.
 - An explicit `lam cleanup --apply` may remove only allowlisted
   machine-generated artifacts selected under the documented retention policy.
 - These routine actions do not require separate per-file approval.

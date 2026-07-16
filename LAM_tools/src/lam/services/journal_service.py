@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..exceptions import FileOperationError
+from ..run_context import current_run_context
 
 
 class OperationJournal:
@@ -37,6 +38,10 @@ class OperationJournal:
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "operations": operations,
         }
+        context = current_run_context()
+        if context is not None:
+            payload["invocation_id"] = context.run_id
+            payload["top_level_command"] = context.top_level_command
         journal = cls(path, payload)
         journal.write()
         return journal
@@ -47,20 +52,54 @@ class OperationJournal:
         state: str,
         *,
         record_uid: str | None = None,
+        operation_id: str | None = None,
+        document_id: str | None = None,
         **details: Any,
     ) -> None:
-        for operation in self.payload["operations"]:
-            uid_matches = bool(
-                record_uid
-                and operation.get("record_uid")
-                and operation.get("record_uid") == record_uid
+        """Advance selected operations while retaining the legacy row/UID API.
+
+        ``operation_id`` has highest precedence, followed by ``document_id``.
+        When either precise selector is supplied, row and record UID fallback is
+        intentionally disabled so that sibling documents for the same paper are
+        not advanced accidentally.
+        """
+        operations = self.payload["operations"]
+        if operation_id is not None:
+            selected_operations = [
+                operation
+                for operation in operations
+                if operation.get("operation_id") == operation_id
+            ]
+            selector = f"operation_id={operation_id!r}"
+        elif document_id is not None:
+            selected_operations = [
+                operation
+                for operation in operations
+                if operation.get("document_id") == document_id
+            ]
+            selector = f"document_id={document_id!r}"
+        else:
+            selected_operations = []
+            for operation in operations:
+                uid_matches = bool(
+                    record_uid
+                    and operation.get("record_uid")
+                    and operation.get("record_uid") == record_uid
+                )
+                if uid_matches or operation.get("catalogue_row") == catalogue_row:
+                    selected_operations.append(operation)
+            selector = ""
+        if selector and len(selected_operations) != 1:
+            raise FileOperationError(
+                "Operation journal selector must match exactly one operation: "
+                f"{selector}; matches={len(selected_operations)}"
             )
-            if uid_matches or operation.get("catalogue_row") == catalogue_row:
-                operation["execution_state"] = state
-                stages = operation.setdefault("stages", [])
-                if not stages or stages[-1] != state:
-                    stages.append(state)
-                operation.update(details)
+        for operation in selected_operations:
+            operation["execution_state"] = state
+            stages = operation.setdefault("stages", [])
+            if not stages or stages[-1] != state:
+                stages.append(state)
+            operation.update(details)
         self.payload["status"] = state
         self.write()
 

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from ..models import WorkflowResult
+from .. import __version__
+from ..run_context import current_run_context
 
 
 class ReportService:
@@ -14,6 +16,20 @@ class ReportService:
         self.reports_dir = reports_dir
 
     def write(self, result: WorkflowResult) -> Path:
+        context = current_run_context()
+        result.version = __version__
+        if context is not None:
+            result.command = context.top_level_command
+            result.caller = context.caller
+            result.invocation_id = context.run_id
+        elif not result.command:
+            result.command = result.workflow
+        if not result.final_check:
+            value = result.details.get("final_check")
+            if isinstance(value, dict):
+                result.final_check = value
+            elif value is True:
+                result.final_check = {"requested": True}
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
         stem = f"{stamp}-{result.workflow}"
@@ -39,6 +55,8 @@ class ReportService:
             "metadata_query": "Metadata query report",
             "publication_type_repair": "Publication type repair report",
             "cleanup": "Machine-generated file cleanup report",
+            "topic_migration": "Topics namespace migration report",
+            "command_registry": "LAM public command registry",
         }.get(result.workflow, result.workflow)
         lines = [
             f"# {title}",
