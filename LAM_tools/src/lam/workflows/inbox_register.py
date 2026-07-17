@@ -295,8 +295,27 @@ class InboxRegisterWorkflow:
                 for item in inspection.title_candidates
             )
         )
-        year_matches = bool(
-            metadata.year and str(metadata.year).strip() in inspection.year_candidates
+        metadata_year = str(metadata.year or "").strip()
+        local_years = {
+            str(value).strip()
+            for value in inspection.year_candidates
+            if str(value).strip()
+        }
+        year_matches = metadata_year in local_years
+        if not year_matches and metadata_year.isdigit():
+            # Online-first and print publication years commonly differ by one.
+            year_matches = any(
+                value.isdigit() and abs(int(value) - int(metadata_year)) <= 1
+                for value in local_years
+            )
+        doi_prefix_agreement = bool(
+            metadata.doi
+            and inspection.ocr_result is not None
+            and any(
+                normalize_doi(metadata.doi).startswith(str(prefix).casefold())
+                for prefix in inspection.ocr_result.doi_prefix_only
+                if prefix
+            )
         )
         if metadata.doi and doi_candidates:
             matching = [
@@ -313,6 +332,8 @@ class InboxRegisterWorkflow:
                 normalize_pmid(item.value) == normalize_pmid(metadata.pmid)
                 for item in pmid_candidates
             )
+        if doi_prefix_agreement:
+            return title_matches and (year_matches or not metadata.year)
         if inspection.ocr_result is not None:
             return title_matches and (year_matches or not metadata.year)
         return True
@@ -490,10 +511,17 @@ class InboxRegisterWorkflow:
             for item in inspection.pmid_candidates
             if normalize_pmid(item.value)
         }
+        trusted_local_doi_sources = {
+            "metadata",
+            "filename",
+            "first_page",
+            "sampled_page",
+        }
         pdf_dois = {
             normalize_doi(item.value)
             for item in inspection.doi_candidates
-            if normalize_doi(item.value) and item.source_type != "ocr_corrected"
+            if normalize_doi(item.value)
+            and item.source_type in trusted_local_doi_sources
         }
         if catalogue_pmid and provider.pmid and catalogue_pmid != normalize_pmid(provider.pmid):
             conflicts.append("pmid_catalogue_provider_conflict")

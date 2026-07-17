@@ -1,8 +1,9 @@
 # LAM — Local Archives Manager
 
 LAM is a deterministic local manager for a research literature library.
-Version 0.5.7 adds Crossref metadata lookup and bounded recognition of scanned
-or screenshot-wrapped PDFs while preserving the existing pure-CLI workflows.
+Version 0.5.8 adds an extensible document-analysis interface, centralized
+candidate cleaning, multiline title/DOI reconstruction, and tracked provisional
+Inbox Documents while preserving the existing pure-CLI workflows.
 It never reads or modifies `summary.md`.
 
 ```text
@@ -139,15 +140,27 @@ arXiv and Unpaywall PDF locations. Downloads are streamed to managed temporary
 storage, size-limited, validated and committed to `Inbox/` without overwrite.
 
 Workflow 3 progressively uses filename/PDF metadata, bounded pypdf text and a
-title or identifier lookup before OCR. If identity remains unconfirmed, it
-classifies the PDF as native text, scanned, screenshot-wrapped, or unknown
-image content. Repeated viewer chrome is excluded from content OCR while its
-footer URL remains available as identity evidence. Screenshot-like files use
-bounded first-page metadata regions rather than full-page or full-document OCR.
-OCR recovers only title, first-author, DOI, year, journal and supplementary
-clues; corrected DOI candidates must be verified by a provider. Unconfirmed
-files retain local metadata in a provisional Catalogue row, create no Documents
-row and remain in `Inbox/`. Supplementary registration never calls Workflow 2.
+title or identifier lookup before OCR. Native PDF and EasyOCR implementations
+now conform to one document-analysis request/result protocol; future layout or
+vision backends can be added without changing Workflow 3. No new large model is
+installed by 0.5.8.
+
+All local candidates are classified as `trusted`, `usable`, `weak`, or
+`rejected`. Viewer/publisher navigation, contaminated PDF metadata, truncated
+DOIs, URL-like titles, and layout headers are rejected before provider lookup
+or conflict evaluation. Adjacent title lines and DOI/URL fragments may be
+reconstructed within bounded regions; line-end hyphenation is repaired without
+joining ordinary words. A DOI must have a complete `10.<registrant>/<suffix>`
+structure and reasonable length. A prefix such as `10.1016/j` is auxiliary
+evidence only and cannot be queried, written to Catalogue, or establish identity.
+
+If identity remains unconfirmed, screenshot-like files still use bounded
+first-page metadata regions rather than full-page or full-document OCR.
+Corrected or reconstructed OCR DOI candidates require provider verification.
+The provisional Catalogue row now has a corresponding `Documents` row pointing
+to the unchanged Inbox file with `file_status=inbox`; this tracks the physical
+file without claiming its identity and prevents duplicate unmatched reports.
+Supplementary registration never calls Workflow 2.
 
 ## Zotero-compatible citation export
 
@@ -206,7 +219,7 @@ CROSSREF_ENABLED=true
 CROSSREF_EMAIL=you@example.org
 CROSSREF_MIN_INTERVAL_SECONDS=1.0
 CROSSREF_MAX_RESULTS=10
-HTTP_USER_AGENT=LAM/0.5.7
+HTTP_USER_AGENT=LAM/0.5.8
 OCR_ENABLED=true
 OCR_LANGUAGES=en
 OCR_DPI=250
@@ -214,6 +227,10 @@ OCR_GPU=auto
 OCR_DOWNLOAD_ENABLED=false
 POPPLER_PATH=
 OCR_MODEL_STORAGE_DIR=
+DOCUMENT_ANALYSIS_BACKEND=auto
+DOCUMENT_ANALYSIS_FALLBACKS=native,easyocr
+DOI_MIN_SUFFIX_ALNUM=3
+DOI_MAX_LENGTH=200
 ```
 
 LAM never prints secret values. PubMed uses at least 0.36 seconds between

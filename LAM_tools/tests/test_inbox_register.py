@@ -163,7 +163,12 @@ def test_unavailable_metadata_creates_provisional_catalogue_row(library_factory)
     assert paper_uuid.version == 4
     assert "id" not in headers
     assert "pdf_status" not in headers
-    assert workbook["Documents"].max_row == 1
+    documents = workbook["Documents"]
+    document_headers = {cell.value: cell.column for cell in documents[1]}
+    assert documents.max_row == 2
+    assert documents.cell(2, document_headers["paper_uuid"]).value == str(paper_uuid)
+    assert documents.cell(2, document_headers["relative_path"]).value == "Inbox/unknown.pdf"
+    assert documents.cell(2, document_headers["file_status"]).value == "inbox"
     assert "issue_key=metadata_identity_unconfirmed" in sheet.cell(
         2, headers["uncertainty"]
     ).value

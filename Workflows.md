@@ -581,6 +581,18 @@ receives a stable provisional catalogue row and remains in `Inbox/`.
 
 ### PDF visual classification and first-page OCR fallback
 
+Workflow 3 requests local analysis through `DocumentAnalysisService`, not an
+OCR implementation directly. Every backend implements the same bounded
+`DocumentAnalysisRequest` / `DocumentAnalysisResult` contract. The installed
+backends are `NativePdfBackend` and `EasyOcrRegionBackend`.
+
+`DOCUMENT_ANALYSIS_BACKEND=auto` selects native analysis when embedded text is
+sufficient and EasyOCR regions for scanned or screenshot-wrapped content.
+`DOCUMENT_ANALYSIS_FALLBACKS=native,easyocr` reserves an ordered extension point;
+uninstalled Docling, GROBID, layout-aware, or advanced-vision backends are not
+called implicitly and return an explainable unavailable result. Version 0.5.8
+adds no new large model dependency.
+
 Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. A usable
 title or identifier is submitted to Workflow 2 before deeper OCR. A confirmed
 provider result skips unnecessary OCR. After Workflow 2 returns `not_found`,
@@ -611,7 +623,8 @@ For scanned, screenshot-wrapped, and unknown-image files, OCR is restricted to
 bounded metadata regions: journal header, title/author, article information,
 DOI, abstract header, and viewer footer URL. Each region receives at most three
 deterministic attempts: raw crop, 2× grayscale/autocontrast, and 2× light
-sharpening or thresholding. OCR does not recover full text, transcribe the full
+sharpening or thresholding. DOI/footer regions use a bounded 3× final attempt
+and a DOI-character allowlist. OCR does not recover full text, transcribe the full
 abstract, parse references, tables, or every page.
 
 OCR results preserve text boxes and confidence, are spatially ordered, and may
@@ -622,6 +635,38 @@ evidence cannot authorize a move. OCR-derived
 identifiers with unique confirmation may proceed through the existing local
 match or Workflow 2 verification. Successful files still move only from
 `Inbox/` to `Registered/`; Workflow 4 is unchanged.
+
+### Candidate cleaning and reconstruction
+
+Every local title, author, journal, year, and DOI candidate uses one confidence
+vocabulary:
+
+```text
+trusted > usable > weak > rejected
+```
+
+Only `trusted` and `usable` candidates enter provider queries. `weak` candidates
+may support scoring but cannot create a hard conflict. `rejected` candidates are
+reported with rejection reasons and otherwise ignored. PDF metadata containing
+viewer/download-source text, `Anna's Archive`, publisher navigation,
+`journal homepage`, `ScienceDirect`, volume/ISSN/page headers, or URLs is marked
+`metadata_title_contaminated`; it does not enter canonical title selection,
+provider lookup, or `pdf_text_ocr_conflict`.
+
+Within the title region, OCR blocks are ordered by geometry and consecutive
+one-to-four-line combinations are evaluated. Composition stops before authors,
+affiliations, article information, or abstract headings. A line-final hyphen is
+removed only when the next line begins with a lowercase continuation; ordinary
+line breaks retain a word space.
+
+DOIs are URL-decoded, stripped of known prefixes and whitespace, then validated
+against `10.<4-9 digits>/<suffix>` plus centralized suffix and total-length
+limits. Adjacent fragments are joined only inside one DOI/footer region and
+only when subsequent fragments use the DOI suffix character set. A partial
+value such as `10.1016/j` is `doi_prefix_only`: it is never queried exactly,
+written to Catalogue, or used alone for identity. It may support a complete
+provider DOI only after compatible title/year evidence. Corrected or merged OCR
+DOIs still require Crossref, PubMed, or Unpaywall verification.
 
 Repeated pypdf font-dictionary diagnostics such as duplicate `/Ascent`
 definitions are collapsed into one `pypdf_font_dictionary_warning`. They are
@@ -680,8 +725,11 @@ For each candidate file:
 14. Rename the file.
 15. Move it to `Registered/`.
 16. If identity remains unconfirmed, create or update one stable provisional
-    `paper_uuid` row, add one paper-identity blocker, create no Documents row,
-    and leave the PDF unchanged in `Inbox/`.
+    `paper_uuid` row, add one paper-identity blocker, create or update a main
+    Documents row with the unchanged `Inbox/...` path and `file_status=inbox`,
+    and leave the PDF unchanged in `Inbox/`. The Documents row records physical
+    custody only and does not assert identity; Workflow 1 must not repeat
+    `unmatched_local_document` for this tracked file.
 
 Before applying ready operations, write a recoverable journal under
 `.library_state/runs/<run_id>/operation_journal.json`. Update it through
@@ -716,6 +764,7 @@ For unresolved files:
 
 - preserve the file;
 - create or update a stable provisional row when no unique row is known;
+- track the unchanged Inbox file in Documents without claiming identity;
 - add or update one `NEEDS_REVIEW:` paper-identity blocker;
 - continue processing other eligible files.
 

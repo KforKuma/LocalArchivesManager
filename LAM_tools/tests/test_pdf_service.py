@@ -154,7 +154,7 @@ def test_ocr_trigger_modes_and_skip_text_semantics(library_factory):
     assert skipped.ocr_result is None
 
 
-def test_ocr_candidates_merge_and_conflicts_are_reported(library_factory):
+def test_unverified_local_candidate_disagreement_is_nonblocking(library_factory):
     root = library_factory([])
     path = root / "Inbox" / "mixed.pdf"
     write_text_pdf(
@@ -168,7 +168,8 @@ def test_ocr_candidates_merge_and_conflicts_are_reported(library_factory):
     )
     assert "10.1000/embedded" in [item.value for item in inspection.doi_candidates]
     assert "10.1000/scan" in [item.value for item in inspection.doi_candidates]
-    assert "pdf_text_ocr_conflict" in inspection.warnings
+    assert "candidate_disagreement" in inspection.warnings
+    assert "pdf_text_ocr_conflict" not in inspection.warnings
     summary = inspection.report_summary()
     assert "combined_text" not in summary["ocr"]
     assert summary["ocr"]["doi_candidates"] == ["10.1000/scan"]

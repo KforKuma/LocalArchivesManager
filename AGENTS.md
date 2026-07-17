@@ -177,6 +177,10 @@ uncertainty
 File state, name, path, hash, source, and file-level uncertainty are maintained
 only in `Documents`.
 
+An unresolved Workflow 3 provisional paper has a main Documents row pointing to
+the unchanged `Inbox/` file with `file_status=inbox`. This records physical
+custody only; it does not confirm identity or authorize rename/movement.
+
 Machine updates must still preserve protected user text and be logged.
 
 For an accepted exact provider record, harmless formatting normalization of
@@ -229,7 +233,8 @@ This means:
 - An explicit `lam init --apply` may create a new library only at an absent or
   demonstrably empty target and establish its initial Workflow 1 baseline.
 - Workflow 2 may update eligible metadata and perform an explicitly requested download.
-- Workflow 3 may rename successfully identified files and move them from `Inbox/` to `Registered/`.
+- Workflow 3 may track unresolved Inbox files in Documents, and may rename
+  successfully identified files and move them from `Inbox/` to `Registered/`.
 - Workflow 4 may move registered files from `Registered/` or existing paths
   below `Topics/` according to confirmed `topic_folder` values, and may remove
   only a truly empty old topic directory below `Topics/`.

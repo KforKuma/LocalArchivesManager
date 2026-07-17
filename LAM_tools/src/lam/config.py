@@ -46,7 +46,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.5.7"
+    user_agent: str = "LAM/0.5.8"
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +133,14 @@ class OcrConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DocumentAnalysisConfig:
+    backend: str = "auto"
+    fallbacks: tuple[str, ...] = ("native", "easyocr")
+    doi_min_suffix_alnum: int = 3
+    doi_max_length: int = 200
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     library_root: Path
     project_root: Path
@@ -169,6 +177,9 @@ class Settings:
     download: DownloadConfig = field(default_factory=DownloadConfig)
     download_temp_dir: Path | None = None
     ocr: OcrConfig = field(default_factory=OcrConfig)
+    document_analysis: DocumentAnalysisConfig = field(
+        default_factory=DocumentAnalysisConfig
+    )
     ocr_cache_dir: Path | None = None
     reserved_root_directories: tuple[str, ...] = ()
 
@@ -199,7 +210,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.7").strip() or "LAM/0.5.7",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.8").strip() or "LAM/0.5.8",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
@@ -278,6 +289,24 @@ class Settings:
             cache_enabled=_env_bool("OCR_CACHE_ENABLED", True),
             configuration_version=os.getenv("OCR_CONFIGURATION_VERSION", "1").strip() or "1",
         )
+        backend = os.getenv("DOCUMENT_ANALYSIS_BACKEND", "auto").strip().casefold()
+        if backend not in {"auto", "native", "easyocr"}:
+            raise ConfigurationError(
+                "DOCUMENT_ANALYSIS_BACKEND must be auto, native, or easyocr"
+            )
+        fallbacks = tuple(
+            item.strip().casefold()
+            for item in os.getenv(
+                "DOCUMENT_ANALYSIS_FALLBACKS", "native,easyocr"
+            ).split(",")
+            if item.strip().casefold() in {"native", "easyocr"}
+        ) or ("native", "easyocr")
+        document_analysis = DocumentAnalysisConfig(
+            backend=backend,
+            fallbacks=tuple(dict.fromkeys(fallbacks)),
+            doi_min_suffix_alnum=max(1, _env_int("DOI_MIN_SUFFIX_ALNUM", 3)),
+            doi_max_length=max(32, min(1000, _env_int("DOI_MAX_LENGTH", 200))),
+        )
         return cls(
             library_root=library_root,
             project_root=project_root,
@@ -308,6 +337,7 @@ class Settings:
             download=download,
             download_temp_dir=library_root / ".library_state" / "tmp",
             ocr=ocr,
+            document_analysis=document_analysis,
             ocr_cache_dir=library_root / ".library_state" / "ocr_cache",
             reserved_root_directories=parse_reserved_root_directories(
                 os.getenv("RESERVED_ROOT_DIRECTORIES")

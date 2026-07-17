@@ -132,10 +132,18 @@ class RegisteredRecordCanonicalizer:
                 and field_name in {"title", "authors", "year"}
                 and not has_user_confirmation(record.get("uncertainty"), field_name)
             )
+            invalid_provisional_identifier = bool(
+                provisional
+                and field_name == "doi"
+                and current not in (None, "")
+                and not normalize_doi(current)
+                and not has_user_confirmation(record.get("uncertainty"), field_name)
+            )
             if (
                 current in (None, "")
                 or self._equivalent(field_name, current, value)
                 or provisional_machine_value
+                or invalid_provisional_identifier
             ):
                 updates[field_name] = value
 

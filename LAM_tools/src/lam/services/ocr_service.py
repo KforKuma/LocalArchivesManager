@@ -19,6 +19,8 @@ from typing import Any, Callable
 
 from ..config import OcrConfig, Settings
 from ..models import (
+    AnalysisCandidate,
+    CandidateConfidence,
     IdentifierCandidate,
     MetadataRegionResult,
     OcrAvailability,
@@ -28,7 +30,13 @@ from ..models import (
     TitleCandidate,
     VisualPdfInspection,
 )
-from ..utils.identifiers import extract_doi_candidates, extract_pmid_candidates
+from ..utils.candidate_cleaning import merge_title_blocks
+from ..utils.identifiers import (
+    extract_doi_candidates,
+    extract_pmid_candidates,
+    merge_doi_fragments,
+    parse_doi_candidate,
+)
 from ..utils.text import normalize_title, title_candidates_from_page
 
 
@@ -381,10 +389,13 @@ class OcrService:
         return factory(list(cfg.languages), **kwargs)
 
     @staticmethod
-    def _read_image(reader: Any, image: Any):
+    def _read_image(reader: Any, image: Any, *, allowlist: str | None = None):
         import numpy as np
 
-        return reader.readtext(np.asarray(image), detail=1, paragraph=False)
+        kwargs: dict[str, Any] = {"detail": 1, "paragraph": False}
+        if allowlist:
+            kwargs["allowlist"] = allowlist
+        return reader.readtext(np.asarray(image), **kwargs)
 
     @staticmethod
     def _preprocess(image: Any):
@@ -454,13 +465,30 @@ class OcrService:
         ]
         if any(item.source_type == "ocr_corrected" for item in result.doi_candidates):
             result.warnings.append("ocr_identifier_corrected")
+        merged_dois = merge_doi_fragments(result.ordered_lines)
+        exact_values = {item.value for item in result.doi_candidates}
+        for parsed in merged_dois:
+            if parsed.complete and parsed.value not in exact_values:
+                result.doi_candidates.append(
+                    IdentifierCandidate(
+                        parsed.value,
+                        page=1,
+                        line_or_context="adjacent OCR fragments merged",
+                        confidence="medium",
+                        source_type="ocr_merged",
+                    )
+                )
+                exact_values.add(parsed.value)
+                result.doi_fragments_merged += 1
+            elif parsed.status == "prefix_only":
+                result.doi_prefix_only.append(parsed.value)
         result.pmid_candidates = extract_pmid_candidates(
             result.combined_text, source_type="ocr"
         )
         result.year_candidates = sorted(
             set(re.findall(r"\b(?:19|20)\d{2}\b", result.combined_text))
         )
-        top_blocks = []
+        top_blocks: list[OcrTextBlock] = []
         for block in result.raw_blocks:
             ys = [point[1] for point in block.bounding_box]
             if not ys or max(ys) > result.image_height * 0.45:
@@ -475,15 +503,28 @@ class OcrService:
                 )
             ):
                 continue
-            xs = [point[0] for point in block.bounding_box]
-            top_blocks.append((sum(ys) / len(ys), min(xs), block.text))
-        top_texts = [text for _, _, text in sorted(top_blocks)]
-        candidates = title_candidates_from_page("\n".join(top_texts), page=1)
-        for candidate in candidates:
-            candidate.source_type = "ocr_page_top"
-            candidate.confidence = "high" if len(candidate.value) >= 20 else "medium"
-            candidate.evidence = "easyocr_first_page_top_region"
-        result.title_candidates = candidates
+            top_blocks.append(block)
+        merged_titles, metrics = merge_title_blocks(
+            top_blocks, page=1, region="first_page_top"
+        )
+        result.title_lines_merged = metrics["title_lines_merged"]
+        result.hyphenation_repaired = metrics["hyphenation_repaired"]
+        result.rejected_title_candidates = [
+            item for item in merged_titles if not item.query_eligible
+        ]
+        result.title_candidates = [
+            TitleCandidate(
+                item.value,
+                "high"
+                if item.confidence == CandidateConfidence.TRUSTED
+                else "medium",
+                item.source,
+                item.page,
+                item.evidence,
+            )
+            for item in merged_titles
+            if item.query_eligible
+        ]
 
     def _inspect_metadata_regions(
         self,
@@ -503,7 +544,8 @@ class OcrService:
             right = max(left + 1, min(image.width, round(box[2] * image.width)))
             bottom = max(top + 1, min(image.height, round(box[3] * image.height)))
             crop = image.crop((left, top, right, bottom))
-            attempts = self._region_variants(crop)
+            doi_mode = region_name in {"article_doi_region", "viewer_footer_url"}
+            attempts = self._region_variants(crop, doi_mode=doi_mode)
             best_blocks: list[OcrTextBlock] = []
             best_accepted: list[OcrTextBlock] = []
             best_name = "raw_crop"
@@ -511,7 +553,18 @@ class OcrService:
             attempt_count = 0
             for attempt_name, candidate_image in attempts:
                 attempt_count += 1
-                blocks = self._blocks(self._read_image(reader, candidate_image))
+                blocks = self._blocks(
+                    self._read_image(
+                        reader,
+                        candidate_image,
+                        allowlist=(
+                            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                            "-._;()/:,%?=&"
+                            if doi_mode
+                            else None
+                        ),
+                    )
+                )
                 accepted = [
                     item for item in blocks if item.confidence >= cfg.min_confidence
                 ]
@@ -537,6 +590,57 @@ class OcrService:
                     else "region_ocr"
                 ),
             )
+            merged = merge_doi_fragments(
+                lines,
+                min_suffix_alnum=self.settings.document_analysis.doi_min_suffix_alnum,
+                max_length=self.settings.document_analysis.doi_max_length,
+            )
+            for parsed in merged:
+                if parsed.complete and parsed.value not in {item.value for item in exact}:
+                    exact.append(
+                        IdentifierCandidate(
+                            parsed.value,
+                            page=1,
+                            line_or_context=f"region={region_name}; adjacent fragments merged",
+                            confidence="medium",
+                            source_type=(
+                                "footer_url_ocr_merged"
+                                if region_name == "viewer_footer_url"
+                                else "doi_region_ocr_merged"
+                            ),
+                        )
+                    )
+                    result.doi_fragments_merged += 1
+                elif parsed.status == "prefix_only":
+                    result.doi_prefix_only.append(parsed.value)
+                    result.rejected_doi_candidates.append(
+                        AnalysisCandidate(
+                            parsed.value,
+                            "doi",
+                            "footer_url_ocr"
+                            if region_name == "viewer_footer_url"
+                            else "doi_region_ocr",
+                            CandidateConfidence.REJECTED,
+                            page=1,
+                            region=region_name,
+                            rejection_reasons=list(parsed.rejection_reasons),
+                        )
+                    )
+                elif "doi_length_rejected" in parsed.rejection_reasons:
+                    result.doi_length_rejected.append(parsed.value or parsed.raw_value[:200])
+                    result.rejected_doi_candidates.append(
+                        AnalysisCandidate(
+                            parsed.value or parsed.raw_value[:200],
+                            "doi",
+                            "footer_url_ocr"
+                            if region_name == "viewer_footer_url"
+                            else "doi_region_ocr",
+                            CandidateConfidence.REJECTED,
+                            page=1,
+                            region=region_name,
+                            rejection_reasons=list(parsed.rejection_reasons),
+                        )
+                    )
             urls = list(
                 dict.fromkeys(
                     re.sub(r"[),.;]+$", "", value)
@@ -558,6 +662,7 @@ class OcrService:
                     selected_preprocessing=best_name,
                     doi_candidates=exact,
                     url_candidates=urls,
+                    blocks=best_accepted,
                 )
             )
             all_blocks.extend(best_blocks)
@@ -570,17 +675,21 @@ class OcrService:
         return all_blocks, all_accepted
 
     @staticmethod
-    def _region_variants(image: Any) -> list[tuple[str, Any]]:
+    def _region_variants(image: Any, *, doi_mode: bool = False) -> list[tuple[str, Any]]:
         from PIL import ImageEnhance, ImageOps
 
         enlarged = image.resize((image.width * 2, image.height * 2))
         contrasted = ImageOps.autocontrast(ImageOps.grayscale(enlarged))
-        sharpened = ImageEnhance.Sharpness(contrasted).enhance(1.35)
+        final_scale = 3 if doi_mode else 2
+        final_image = image.resize((image.width * final_scale, image.height * final_scale))
+        sharpened = ImageEnhance.Sharpness(
+            ImageOps.autocontrast(ImageOps.grayscale(final_image))
+        ).enhance(1.35)
         thresholded = sharpened.point(lambda value: 255 if value >= 178 else 0)
         return [
             ("raw_crop", image),
             ("2x_grayscale_autocontrast", contrasted),
-            ("2x_light_sharpen_threshold", thresholded),
+            (f"{final_scale}x_light_sharpen_threshold", thresholded),
         ]
 
     @staticmethod
@@ -618,20 +727,39 @@ class OcrService:
             (item for item in result.metadata_regions if item.region == "title_author"),
             None,
         )
-        candidates = title_candidates_from_page(
-            title_region.text if title_region else "", page=1
+        merged_titles, metrics = merge_title_blocks(
+            title_region.blocks if title_region else [], page=1
         )
-        for candidate in candidates:
-            candidate.source_type = "ocr_title_author_region"
-            candidate.confidence = "high" if len(candidate.value) >= 20 else "medium"
-            candidate.evidence = "easyocr_title_author_region"
-        result.title_candidates = candidates
+        result.title_lines_merged = metrics["title_lines_merged"]
+        result.hyphenation_repaired = metrics["hyphenation_repaired"]
+        result.rejected_title_candidates = [
+            item for item in merged_titles if not item.query_eligible
+        ]
+        result.title_candidates = [
+            TitleCandidate(
+                item.value,
+                "high"
+                if item.confidence == CandidateConfidence.TRUSTED
+                else "medium",
+                item.source,
+                item.page,
+                item.evidence,
+            )
+            for item in merged_titles
+            if item.query_eligible
+        ]
 
     @staticmethod
     def _correct_ocr_doi_text(text: str) -> str:
         corrected = text.replace("，", ",").replace("。", ".")
         corrected = re.sub(r"\b[Il1][Oo0][,.]\s*(\d{4,9})\s*/\s*", r"10.\1/", corrected)
         corrected = re.sub(r"\b10\s*[,.]\s*(\d{4,9})\s*/\s*", r"10.\1/", corrected)
+        corrected = re.sub(
+            r"(10\.\d{4,9}/[a-z])-(?=[a-z]{2,}\.)",
+            r"\1.",
+            corrected,
+            flags=re.I,
+        )
         corrected = re.sub(
             r"(10\.\d{4,9}/\S+?)\s+(?:p(?:age)?\.?\s*)?\d{1,4}\b",
             r"\1",
@@ -665,7 +793,7 @@ class OcrService:
                 cfg.preprocessing_mode,
                 str(cfg.min_confidence),
                 cfg.configuration_version,
-                "regional-v1" if visual is not None else "full-page-v1",
+                "regional-v2" if visual is not None else "full-page-v2",
                 visual.pdf_visual_type.value if visual is not None else "none",
                 (
                     ",".join(f"{value:.4f}" for value in visual.content_crop)
@@ -700,9 +828,30 @@ class OcrService:
                             IdentifierCandidate(**candidate)
                             for candidate in item.get("doi_candidates", [])
                         ],
+                        "blocks": [
+                            OcrTextBlock(**block) for block in item.get("blocks", [])
+                        ],
                     }
                 )
                 for item in payload.get("metadata_regions", [])
+            ]
+            payload["rejected_title_candidates"] = [
+                AnalysisCandidate(
+                    **{
+                        **item,
+                        "confidence": CandidateConfidence(item["confidence"]),
+                    }
+                )
+                for item in payload.get("rejected_title_candidates", [])
+            ]
+            payload["rejected_doi_candidates"] = [
+                AnalysisCandidate(
+                    **{
+                        **item,
+                        "confidence": CandidateConfidence(item["confidence"]),
+                    }
+                )
+                for item in payload.get("rejected_doi_candidates", [])
             ]
             return OcrInspection(**payload)
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):

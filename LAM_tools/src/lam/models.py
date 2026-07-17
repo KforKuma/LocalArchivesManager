@@ -56,6 +56,13 @@ class PdfVisualType(StrEnum):
     UNKNOWN_IMAGE = "unknown_image_pdf"
 
 
+class CandidateConfidence(StrEnum):
+    TRUSTED = "trusted"
+    USABLE = "usable"
+    WEAK = "weak"
+    REJECTED = "rejected"
+
+
 class OperationType(StrEnum):
     MOVE = "move"
     RENAME = "rename"
@@ -191,6 +198,96 @@ class TitleCandidate:
 
 
 @dataclass(slots=True)
+class AnalysisCandidate:
+    value: str
+    field: str
+    source: str
+    confidence: CandidateConfidence = CandidateConfidence.USABLE
+    page: int | None = None
+    region: str = ""
+    evidence: str = ""
+    rejection_reasons: list[str] = field(default_factory=list)
+
+    @property
+    def query_eligible(self) -> bool:
+        return self.confidence in {
+            CandidateConfidence.TRUSTED,
+            CandidateConfidence.USABLE,
+        }
+
+    def report_summary(self) -> dict[str, Any]:
+        return {
+            "value": self.value[:300],
+            "field": self.field,
+            "source": self.source,
+            "confidence": self.confidence.value,
+            "page": self.page,
+            "region": self.region,
+            "evidence": self.evidence[:300],
+            "rejection_reasons": self.rejection_reasons,
+        }
+
+
+@dataclass(slots=True)
+class DocumentAnalysisRequest:
+    file_path: Path
+    pdf_visual_type: PdfVisualType = PdfVisualType.UNKNOWN_IMAGE
+    requested_fields: set[str] = field(default_factory=set)
+    page_scope: tuple[int, ...] = (1,)
+    regions: list[tuple[str, tuple[float, float, float, float]]] = field(
+        default_factory=list
+    )
+    language_hints: tuple[str, ...] = ("en",)
+    resource_limits: dict[str, Any] = field(default_factory=dict)
+    native_text: str = ""
+    metadata_title: str = ""
+    visual_inspection: VisualPdfInspection | None = None
+    run_id: str = ""
+    trigger_reason: str = ""
+    cache_write: bool = True
+
+
+@dataclass(slots=True)
+class DocumentAnalysisResult:
+    backend: str
+    status: str
+    capabilities_used: set[str] = field(default_factory=set)
+    title_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    author_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    journal_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    year_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    doi_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    duration_ms: int = 0
+    raw_result: Any = None
+
+    @property
+    def candidates(self) -> list[AnalysisCandidate]:
+        return [
+            *self.title_candidates,
+            *self.author_candidates,
+            *self.journal_candidates,
+            *self.year_candidates,
+            *self.doi_candidates,
+        ]
+
+    def report_summary(self) -> dict[str, Any]:
+        counts = {item.value: 0 for item in CandidateConfidence}
+        for candidate in self.candidates:
+            counts[candidate.confidence.value] += 1
+        return {
+            "backend": self.backend,
+            "status": self.status,
+            "capabilities_used": sorted(self.capabilities_used),
+            "candidate_counts": counts,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "duration_ms": self.duration_ms,
+        }
+
+
+@dataclass(slots=True)
 class OcrConfiguration:
     languages: list[str] = field(default_factory=lambda: ["en"])
     dpi: int = 250
@@ -231,6 +328,7 @@ class MetadataRegionResult:
     selected_preprocessing: str = ""
     doi_candidates: list[IdentifierCandidate] = field(default_factory=list)
     url_candidates: list[str] = field(default_factory=list)
+    blocks: list[OcrTextBlock] = field(default_factory=list)
 
     def report_summary(self) -> dict[str, Any]:
         return {
@@ -307,6 +405,13 @@ class OcrInspection:
     cache_hit: bool = False
     trigger_reason: str = ""
     metadata_regions: list[MetadataRegionResult] = field(default_factory=list)
+    rejected_title_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    rejected_doi_candidates: list[AnalysisCandidate] = field(default_factory=list)
+    title_lines_merged: int = 0
+    hyphenation_repaired: int = 0
+    doi_fragments_merged: int = 0
+    doi_prefix_only: list[str] = field(default_factory=list)
+    doi_length_rejected: list[str] = field(default_factory=list)
 
     def report_summary(self) -> dict[str, Any]:
         confidences = [item.confidence for item in self.raw_blocks]
@@ -332,6 +437,17 @@ class OcrInspection:
             "cache_hit": self.cache_hit,
             "trigger_reason": self.trigger_reason,
             "metadata_regions": [item.report_summary() for item in self.metadata_regions],
+            "rejected_title_candidates": [
+                item.report_summary() for item in self.rejected_title_candidates
+            ],
+            "rejected_doi_candidates": [
+                item.report_summary() for item in self.rejected_doi_candidates
+            ],
+            "title_lines_merged": self.title_lines_merged,
+            "hyphenation_repaired": self.hyphenation_repaired,
+            "doi_fragments_merged": self.doi_fragments_merged,
+            "doi_prefix_only": self.doi_prefix_only,
+            "doi_length_rejected": self.doi_length_rejected,
         }
 
 
@@ -367,6 +483,7 @@ class PdfInspection:
     ocr_result: OcrInspection | None = None
     visual_inspection: VisualPdfInspection | None = None
     identity_evidence: LocalIdentityEvidence = field(default_factory=LocalIdentityEvidence)
+    analysis_results: list[DocumentAnalysisResult] = field(default_factory=list)
 
     def report_summary(self) -> dict[str, Any]:
         return {
@@ -401,6 +518,7 @@ class PdfInspection:
                 if self.visual_inspection is not None
                 else None
             ),
+            "analysis": [item.report_summary() for item in self.analysis_results],
         }
 
 

@@ -12,12 +12,16 @@ from pypdf import PdfReader
 
 from ..config import Settings
 from ..models import (
+    CandidateConfidence,
+    DocumentAnalysisRequest,
     IdentifierCandidate,
     LocalIdentityEvidence,
     OcrInspection,
     PdfInspection,
     TitleCandidate,
+    PdfVisualType,
 )
+from ..utils.candidate_cleaning import classify_title_candidate
 from ..utils.identifiers import extract_doi_candidates, extract_pmid_candidates
 from ..utils.local_pdf_metadata import extract_local_pdf_metadata
 from ..utils.text import (
@@ -29,10 +33,17 @@ from ..utils.text import (
 
 
 class PdfService:
-    def __init__(self, settings: Settings, ocr_service=None, visual_service=None):
+    def __init__(
+        self,
+        settings: Settings,
+        ocr_service=None,
+        visual_service=None,
+        analysis_service=None,
+    ):
         self.settings = settings
         self.ocr_service = ocr_service
         self.visual_service = visual_service
+        self.analysis_service = analysis_service
         self._cache: dict[tuple[object, ...], PdfInspection] = {}
 
     def inspect(
@@ -182,6 +193,7 @@ class PdfService:
                 if not result.sampled_text.strip():
                     result.warnings.append("text_unavailable")
 
+            self._clean_native_title_candidates(result)
             pypdf_dois = list(result.doi_candidates)
             pypdf_pmids = list(result.pmid_candidates)
             pypdf_titles = list(result.title_candidates)
@@ -219,26 +231,78 @@ class PdfService:
                 result, ocr_mode, extract_text, ocr_trigger_reason
             )
             if trigger_reason:
-                service = self.ocr_service
-                if service is None:
-                    from .ocr_service import OcrService
-
-                    service = OcrService(self.settings)
-                    self.ocr_service = service
                 config = replace(
                     self.settings.ocr,
                     languages=ocr_languages or self.settings.ocr.languages,
                     dpi=ocr_dpi or self.settings.ocr.dpi,
                     gpu=ocr_gpu or self.settings.ocr.gpu,
                 )
-                ocr = service.inspect_first_page(
-                    resolved,
-                    run_id=run_id or f"inspect-{stat.st_mtime_ns}",
-                    trigger_reason=trigger_reason,
-                    config=config,
-                    cache_write=ocr_cache_write,
-                    visual_inspection=result.visual_inspection,
+                analysis = self._analysis_service().analyze(
+                    DocumentAnalysisRequest(
+                        file_path=resolved,
+                        pdf_visual_type=(
+                            result.visual_inspection.pdf_visual_type
+                            if result.visual_inspection is not None
+                            else PdfVisualType.UNKNOWN_IMAGE
+                        ),
+                        requested_fields={
+                            "title",
+                            "author",
+                            "journal",
+                            "year",
+                            "doi",
+                            "footer_url",
+                        },
+                        page_scope=(1,),
+                        regions=[],
+                        language_hints=config.languages,
+                        resource_limits={"ocr_config": config},
+                        native_text=result.first_page_text,
+                        metadata_title=result.metadata_title,
+                        visual_inspection=result.visual_inspection,
+                        run_id=run_id or f"inspect-{stat.st_mtime_ns}",
+                        trigger_reason=trigger_reason,
+                        cache_write=ocr_cache_write,
+                    ),
+                    backend_name="easyocr",
                 )
+                result.analysis_results.append(analysis)
+                ocr = analysis.raw_result
+                if not isinstance(ocr, OcrInspection):
+                    ocr = OcrInspection(
+                        status=analysis.status,
+                        warnings=list(analysis.warnings),
+                        errors=list(analysis.errors),
+                        trigger_reason=trigger_reason,
+                    )
+                ocr.title_candidates = [
+                    TitleCandidate(
+                        item.value,
+                        "high"
+                        if item.confidence == CandidateConfidence.TRUSTED
+                        else "medium",
+                        item.source,
+                        item.page,
+                        item.evidence,
+                    )
+                    for item in analysis.title_candidates
+                    if item.query_eligible
+                ]
+                ocr.doi_candidates = [
+                    IdentifierCandidate(
+                        item.value,
+                        page=item.page,
+                        line_or_context=item.evidence,
+                        confidence=(
+                            "high"
+                            if item.confidence == CandidateConfidence.TRUSTED
+                            else "medium"
+                        ),
+                        source_type=item.source,
+                    )
+                    for item in analysis.doi_candidates
+                    if item.query_eligible
+                ]
                 result.ocr_result = ocr
                 self._merge_ocr(result, ocr, pypdf_dois, pypdf_pmids, pypdf_titles)
                 if ocr.status == "success":
@@ -248,15 +312,23 @@ class PdfService:
 
             filename_title = self._title_from_filename(resolved.name)
             if filename_title:
-                result.title_candidates.append(
-                    TitleCandidate(
-                        filename_title,
-                        "medium",
-                        "filename",
-                        None,
-                        "standard_filename",
-                    )
+                classified_filename = classify_title_candidate(
+                    filename_title,
+                    source="filename",
+                    page=None,
+                    region="filename",
+                    evidence="cleaned_filename",
                 )
+                if classified_filename.query_eligible:
+                    result.title_candidates.append(
+                        TitleCandidate(
+                            filename_title,
+                            "high",
+                            "filename",
+                            None,
+                            "cleaned_filename",
+                        )
+                    )
             result.doi_candidates.extend(
                 extract_doi_candidates(resolved.stem, source_type="filename")
             )
@@ -283,11 +355,18 @@ class PdfService:
             local_metadata = extract_local_pdf_metadata(
                 first_page_text=result.first_page_text,
                 filename=result.filename,
-                title_candidates=[
-                    item.value
-                    for item in result.title_candidates
-                    if item.source_type != "ocr_corrected"
-                ],
+                title_candidates=(
+                    [
+                        item.value
+                        for item in result.title_candidates
+                        if item.source_type not in {"filename", "ocr_corrected"}
+                    ]
+                    or [
+                        item.value
+                        for item in result.title_candidates
+                        if item.source_type != "ocr_corrected"
+                    ]
+                ),
                 doi_candidates=[
                     item.value
                     for item in result.doi_candidates
@@ -337,6 +416,62 @@ class PdfService:
                 dict.fromkeys([*result.warnings, *parser_warnings])
             )
         return self._remember(key, result)
+
+    def _analysis_service(self):
+        if self.analysis_service is None:
+            from .document_analysis_service import DocumentAnalysisService
+
+            self.analysis_service = DocumentAnalysisService(
+                self.settings, ocr_service=self.ocr_service
+            )
+        return self.analysis_service
+
+    def _clean_native_title_candidates(self, result: PdfInspection) -> None:
+        native_analysis = self._analysis_service().analyze(
+            DocumentAnalysisRequest(
+                file_path=self.settings.library_root / result.relative_path,
+                pdf_visual_type=(
+                    PdfVisualType.NATIVE_TEXT
+                    if result.first_page_text.strip()
+                    else PdfVisualType.UNKNOWN_IMAGE
+                ),
+                requested_fields={"metadata", "native_text", "title", "doi", "year"},
+                page_scope=(1,),
+                language_hints=self.settings.ocr.languages,
+                resource_limits={
+                    "max_chars": self.settings.pdf_max_chars_per_page,
+                },
+                native_text=result.first_page_text,
+                metadata_title=result.metadata_title,
+            ),
+            backend_name="native",
+        )
+        result.analysis_results.append(native_analysis)
+        cleaned: list[TitleCandidate] = []
+        for candidate in result.title_candidates:
+            classified = classify_title_candidate(
+                candidate.value,
+                source=candidate.source_type,
+                page=candidate.page,
+                region=(
+                    "pdf_metadata"
+                    if candidate.source_type == "metadata"
+                    else "native_page_top"
+                ),
+                evidence=candidate.evidence,
+            )
+            if classified.query_eligible:
+                cleaned.append(candidate)
+            else:
+                if (
+                    candidate.source_type == "metadata"
+                    and "metadata_title_contaminated"
+                    in classified.rejection_reasons
+                ):
+                    result.metadata_title = ""
+                    if "metadata_title_contaminated" not in result.warnings:
+                        result.warnings.append("metadata_title_contaminated")
+        result.title_candidates = cleaned
 
     def _ocr_trigger_reason(
         self,
@@ -391,7 +526,7 @@ class PdfService:
             and ocr_pmid_values
             and pypdf_pmid_values.isdisjoint(ocr_pmid_values)
         ):
-            inspection.warnings.append("pdf_text_ocr_conflict")
+            inspection.warnings.append("candidate_disagreement")
         pypdf_title_values = [normalize_title(item.value) for item in pypdf_titles]
         ocr_title_values = [normalize_title(item.value) for item in ocr.title_candidates]
         if pypdf_title_values and ocr_title_values:
@@ -402,7 +537,7 @@ class PdfService:
                 if left and right
             ]
             if similarities and max(similarities) < 0.80:
-                inspection.warnings.append("pdf_text_ocr_conflict")
+                inspection.warnings.append("candidate_disagreement")
         inspection.doi_candidates = PdfService._unique_identifiers(
             [*pypdf_dois, *ocr.doi_candidates]
         )
@@ -471,7 +606,18 @@ class PdfService:
     def _title_from_filename(filename: str) -> str:
         stem = Path(filename).stem
         match = re.match(r"^.+?,\s*(?:19|20)\d{2}(?:,\s*[^-]+)?\s+-\s+(.+)$", stem)
-        value = match.group(1) if match else ""
+        value = match.group(1) if match else stem
+        if not match:
+            value = re.sub(
+                r"\s+-\s+(?:Anna['’]s Archive|PDF\.js|ScienceDirect).*$",
+                "",
+                value,
+                flags=re.I,
+            )
+            if "_" in value:
+                first, rest = value.split("_", 1)
+                value = f"{first}: {rest}"
+            value = value.replace("_", " ")
         value = re.sub(
             r"\s+-\s+(?:Supplementary|Supporting)\b.*$", "", value, flags=re.I
         )

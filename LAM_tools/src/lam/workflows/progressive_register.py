@@ -510,6 +510,16 @@ class ProgressiveInboxRegisterWorkflow:
                     file_result["provisional_created"] = True
                     file_result["paper_uuid"] = str(record.get("paper_uuid") or "")
                 issue_key, issue = hard_issue or (last_lookup_issue, last_lookup_detail)
+                if catalogue.has_documents_sheet:
+                    self._ensure_provisional_document(
+                        catalogue,
+                        record,
+                        source,
+                        relative,
+                        source_sha256,
+                        historical_document,
+                        file_result,
+                    )
                 self._retain_provisional(
                     catalogue,
                     record,
@@ -1030,6 +1040,7 @@ class ProgressiveInboxRegisterWorkflow:
                 normalize_title(candidate_request.title),
             )
             if signature in attempted_signatures:
+                file_result["provider_queries_suppressed"] += 1
                 continue
             attempted_signatures.add(signature)
             request = candidate_request
@@ -1589,6 +1600,56 @@ class ProgressiveInboxRegisterWorkflow:
             }
         )
 
+    def _ensure_provisional_document(
+        self,
+        catalogue: CatalogueService,
+        record: CatalogueRecord,
+        source: Path,
+        relative: str,
+        source_sha256: str,
+        historical_document,
+        file_result: dict[str, Any],
+    ) -> None:
+        """Track an unresolved physical Inbox PDF without claiming its identity."""
+        paper_uuid = catalogue.ensure_paper_uuid(record)
+        document_id = f"{paper_uuid}:main"
+        existing = historical_document
+        if existing is None:
+            matches = catalogue.find_documents_by("document_id", document_id)
+            existing = matches[0] if len(matches) == 1 else None
+        today = date.today().isoformat()
+        uncertainty = (
+            "NEEDS_REVIEW: field=paper_identity; "
+            "issue_key=metadata_identity_unconfirmed; "
+            "issue=Inbox file is tracked, but paper identity is not confirmed."
+        )
+        values = {
+            "uncertainty": uncertainty,
+            "filename": source.name,
+            "relative_path": relative,
+            "extension": source.suffix,
+            "sha256": source_sha256 or full_hash(source),
+            "file_status": PdfStatus.INBOX.value,
+            "source": "local_pdf",
+            "date_updated": today,
+        }
+        if existing is None:
+            catalogue.add_document(
+                {
+                    "document_id": document_id,
+                    "paper_uuid": paper_uuid,
+                    "document_type": "main",
+                    "date_added": str(record.get("date_added") or today),
+                    **values,
+                }
+            )
+        else:
+            if existing.get("uncertainty"):
+                values.pop("uncertainty")
+            catalogue.update_document_fields(existing, values)
+        file_result["document_id"] = document_id
+        file_result["provisional_document_tracked"] = True
+
     def _filename_inspection(
         self, source: Path, evidence: FilenameEvidence
     ) -> PdfInspection:
@@ -1814,6 +1875,23 @@ class ProgressiveInboxRegisterWorkflow:
             "full_page_image_detected": False,
             "repeated_chrome_detected": False,
             "content_crop_applied": False,
+            "analysis_backends_attempted": [],
+            "analysis_backend_selected": None,
+            "candidate_counts": {
+                "trusted": 0,
+                "usable": 0,
+                "weak": 0,
+                "rejected": 0,
+            },
+            "rejected_title_candidates": [],
+            "rejected_doi_candidates": [],
+            "title_lines_merged": 0,
+            "hyphenation_repaired": 0,
+            "doi_fragments_merged": 0,
+            "doi_prefix_only": [],
+            "doi_length_rejected": [],
+            "provider_queries_suppressed": 0,
+            "candidate_disagreement": [],
             "canonical_title_selected": "",
             "canonical_title_source": "",
             "match_evidence": {},
@@ -1864,7 +1942,53 @@ class ProgressiveInboxRegisterWorkflow:
             file_result["ocr_candidate_corrected"] = any(
                 item.source_type == "ocr_corrected"
                 for item in inspection.ocr_result.doi_candidates
+            ) or any(
+                candidate.source == "ocr_corrected"
+                for analysis in inspection.analysis_results
+                for candidate in analysis.doi_candidates
             )
+            ocr = inspection.ocr_result
+            file_result.update(
+                {
+                    "title_lines_merged": ocr.title_lines_merged,
+                    "hyphenation_repaired": ocr.hyphenation_repaired,
+                    "doi_fragments_merged": ocr.doi_fragments_merged,
+                    "doi_prefix_only": list(dict.fromkeys(ocr.doi_prefix_only)),
+                    "doi_length_rejected": list(
+                        dict.fromkeys(ocr.doi_length_rejected)
+                    ),
+                }
+            )
+        analyses = inspection.analysis_results
+        file_result["analysis_backends_attempted"] = [
+            item.backend for item in analyses
+        ]
+        file_result["analysis_backend_selected"] = (
+            analyses[-1].backend if analyses else None
+        )
+        counts = {"trusted": 0, "usable": 0, "weak": 0, "rejected": 0}
+        rejected_titles = []
+        rejected_dois = []
+        for analysis in analyses:
+            for candidate in analysis.candidates:
+                counts[candidate.confidence.value] += 1
+                if candidate.confidence.value != "rejected":
+                    continue
+                summary = candidate.report_summary()
+                if candidate.field == "title":
+                    rejected_titles.append(summary)
+                elif candidate.field == "doi":
+                    rejected_dois.append(summary)
+        file_result["candidate_counts"] = counts
+        file_result["rejected_title_candidates"] = rejected_titles
+        file_result["rejected_doi_candidates"] = rejected_dois
+        file_result["provider_queries_suppressed"] += len(rejected_titles) + len(
+            rejected_dois
+        )
+        if "candidate_disagreement" in inspection.warnings:
+            file_result["candidate_disagreement"] = [
+                "Local candidates disagree; no trusted provider conflict was established."
+            ]
 
     @staticmethod
     def _set_match_report(file_result: dict[str, Any], match) -> None:
