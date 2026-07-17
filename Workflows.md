@@ -166,6 +166,13 @@ file-level blocker without contaminating paper-level uncertainty.
    reports, logs, sanitized invocation records, and a temporary preflight probe.
 8. All modifications must be backed up where required and recorded in `library_changes.md`.
 
+Production temporary artifacts use one manifested `RunWorkspace` below
+`.library_state/tmp/`. Every workspace contains `.lam-temp.json` with its run,
+workflow, creator, artifact type, cleanup policy and status. Callers close PDF
+readers, streams and detached PIL images before bounded cleanup retries. Success,
+dry-run and ordinary failure clean immediately; explicit debug retention records
+an expiry. pytest basetemp is never allowed below the project or real library.
+
 ---
 
 # Workflow 1: Daily catalogue and file-state check
@@ -590,7 +597,7 @@ backends are `NativePdfBackend` and `EasyOcrRegionBackend`.
 sufficient and EasyOCR regions for scanned or screenshot-wrapped content.
 `DOCUMENT_ANALYSIS_FALLBACKS=native,easyocr` reserves an ordered extension point;
 uninstalled Docling, GROBID, layout-aware, or advanced-vision backends are not
-called implicitly and return an explainable unavailable result. Version 0.5.8
+called implicitly and return an explainable unavailable result. Version 0.5.9
 adds no new large model dependency.
 
 Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. A usable
@@ -891,6 +898,62 @@ New catalogue rows added:
 
 Please review catalogue.xlsx before running Workflow 4.
 ```
+
+---
+
+# Workflow 3B: Reference-text import
+
+Run only through explicit Workflow 3 options:
+
+```text
+lam register --reference-text auto --dry-run --json
+lam register --reference-text auto --json
+lam register --reference-text only --reference-file refs1.txt --json
+```
+
+The default is `--reference-text never`; ordinary registration ignores `.txt`.
+`auto` processes recognized reference lists and Inbox documents in one top-level
+run, while `only` skips PDFs. `--reference-file` may be repeated and
+`--max-references` bounds provider work.
+
+Reference text is a `reference_import_batch`, not a managed Document. LAM
+normalizes Unicode and zero-width characters, recognizes numbered, bulleted and
+blank-separated entries, repairs soft line wrapping and conservative
+hyphenation, then preserves both raw and normalized candidate text with source
+line numbers. A low-confidence note or prose file is skipped as
+`plain_text_not_recognized_as_reference_list`.
+
+Each candidate uses the strongest available route:
+
+```text
+PMID exact > DOI exact > arXiv exact > supported Crossref title > applicable fallback
+```
+
+Title results require author, year or journal support; provider rank alone is
+never identity evidence. Before Catalogue mutation, deduplicate within the
+batch and existing Catalogue by PMID, DOI, arXiv ID, then title + first author +
+year. Valid outcomes are `registered_new`, `matched_existing`,
+`metadata_updated`, `ambiguous`, `not_found`, `invalid_reference`,
+`duplicate_in_batch`, and `identifier_conflict`. Text-only Catalogue records
+are valid and the source `.txt` never creates a Documents row.
+
+Receipts under `.library_state/imports/reference_text/` bind the input SHA-256
+to candidate terminal states. A partial rerun skips successful candidates and
+retries unresolved ones. When no ambiguous, not-found or identifier-conflict
+candidate remains, the opaque source file moves without overwrite to
+`Imports/ReferenceText/Processed/`; otherwise it remains in `Inbox/`.
+
+`--download-missing` explicitly enables OA download after canonical identity is
+confirmed. Eligible sources are official arXiv PDFs, explicit Unpaywall PDFs,
+and Crossref member-submitted `application/pdf` links. The transfer uses a
+manifested production workspace, size/redirect/content/PDF/identity/hash checks,
+then commits directly to `Registered/` under the canonical filename and creates
+one main Documents row. It never bypasses a paywall or authenticated resource.
+No OA location and ordinary transfer failure are non-blocking warnings;
+`--require-download`, identity mismatch and different-content collisions require
+review. A failed download does not undo a successful Catalogue registration.
+
+After the top-level registration completes, Workflow 1 runs exactly once.
 
 ---
 
@@ -1346,6 +1409,8 @@ Run only when explicitly requested:
 ```text
 lam --root D:\ResearchLibrary cleanup --dry-run
 lam --root D:\ResearchLibrary cleanup --apply
+lam --root D:\ResearchLibrary cleanup --dry-run --include-test-artifacts
+lam --root D:\ResearchLibrary cleanup --apply --include-test-artifacts
 ```
 
 Dry run reports each candidate, its reason, and estimated recoverable bytes
@@ -1376,6 +1441,22 @@ Cleanup must never select a PDF, `catalogue.xlsx`, `AGENTS.md`, `Workflows.md`,
 outside these explicit maintenance roots. It must not infer deletability from a
 generic wildcard, and it must not recursively delete an allowlisted directory
 that contains protected or unrecognized content.
+
+Temporary entries are classified as `production_temporary_artifact`,
+`failed_temporary_artifact`, `ocr_debug_artifact`, `download_partial`,
+`test_temporary_artifact`, or `unknown_temporary_artifact`. New production
+artifacts require `.lam-temp.json`; unknown and unreadable entries are reported,
+not guessed safe. Strict historical `pytest-*` roots are only deleted with
+`--include-test-artifacts`, after retention, reparse, lock and active-pytest
+checks. Their contained PDFs may be treated as test fixtures. Cleanup never
+changes ACLs or takes ownership; access denial is
+`cleanup_candidate_unreadable`.
+
+Cleanup reports `deleted`, `skipped`, `failed`, and `partial_success`. If some
+entries were deleted before another failed, top-level status is `failed`, while
+`state_committed=true` and `partial_success=true`. `status library --json`
+exposes temporary directory/file/byte counts, expired, unreadable and unknown
+artifacts, plus the oldest artifact timestamp.
 
 ---
 

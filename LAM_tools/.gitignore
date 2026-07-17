@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .pytest_cache/
 __pycache__/
 *.py[cod]
@@ -6,4 +8,12 @@ __pycache__/
 build/
 dist/
 .idea/
-
+.coverage
+htmlcov/
+dev_local/
+tests/local/
+reports_local/
+*.log
+*.part
+*.tmp
+*.tmp.*

@@ -46,7 +46,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.5.8"
+    user_agent: str = "LAM/0.5.9"
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +176,8 @@ class Settings:
     cache: CacheConfig = field(default_factory=CacheConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     download_temp_dir: Path | None = None
+    keep_failed_temp: bool = False
+    temp_retention_hours: int = 24
     ocr: OcrConfig = field(default_factory=OcrConfig)
     document_analysis: DocumentAnalysisConfig = field(
         default_factory=DocumentAnalysisConfig
@@ -193,8 +195,22 @@ class Settings:
     ) -> "Settings":
         project_root = Path(__file__).resolve().parents[2]
         _load_optional_dotenv(project_root)
+        testing = _env_bool("LAM_TESTING", False)
+        allow_real_tests = _env_bool("LAM_ALLOW_REAL_LIBRARY_TESTS", False)
+        if testing and root is None and not allow_real_tests:
+            raise ConfigurationError(
+                "LAM_TESTING requires an explicit isolated library root; implicit .env/LIBRARY_ROOT resolution is disabled"
+            )
         selected = root or os.getenv("LIBRARY_ROOT") or project_root.parent
         library_root = Path(selected).expanduser().resolve()
+        if testing and not allow_real_tests:
+            real_root = Path(
+                os.getenv("LAM_REAL_LIBRARY_ROOT", str(project_root.parent))
+            ).expanduser().resolve()
+            if library_root == real_root or real_root in library_root.parents:
+                raise ConfigurationError(
+                    f"Tests may not use the real library root: {library_root}"
+                )
         if not library_root.exists() and not allow_missing_root:
             raise ConfigurationError(f"Library root does not exist: {library_root}")
         if library_root.exists() and not library_root.is_dir():
@@ -210,7 +226,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.8").strip() or "LAM/0.5.8",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.9").strip() or "LAM/0.5.9",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
@@ -336,6 +352,8 @@ class Settings:
             unpaywall=unpaywall,
             download=download,
             download_temp_dir=library_root / ".library_state" / "tmp",
+            keep_failed_temp=_env_bool("LAM_KEEP_FAILED_TEMP", False),
+            temp_retention_hours=max(1, _env_int("LAM_TEMP_RETENTION_HOURS", 24)),
             ocr=ocr,
             document_analysis=document_analysis,
             ocr_cache_dir=library_root / ".library_state" / "ocr_cache",

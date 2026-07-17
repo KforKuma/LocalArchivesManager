@@ -157,6 +157,13 @@ def build_parser() -> argparse.ArgumentParser:
     register.add_argument("--ocr-language", action="append", dest="ocr_languages")
     register.add_argument("--ocr-dpi", type=int)
     register.add_argument("--ocr-gpu", choices=("auto", "true", "false"))
+    register.add_argument(
+        "--reference-text", choices=("never", "auto", "only"), default="never"
+    )
+    register.add_argument("--reference-file", action="append", default=[])
+    register.add_argument("--max-references", type=int)
+    register.add_argument("--download-missing", action="store_true")
+    register.add_argument("--require-download", action="store_true")
     _add_provider_policy_options(register)
 
     search = subparsers.add_parser(
@@ -236,7 +243,14 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_topics = migrate_subparsers.add_parser("topics", parents=[maintenance])
     migrate_topics.add_argument("--include-topic", action="append", default=[])
 
-    subparsers.add_parser("cleanup", parents=[maintenance], help=command_definition("cleanup").purpose)
+    cleanup = subparsers.add_parser(
+        "cleanup", parents=[maintenance], help=command_definition("cleanup").purpose
+    )
+    cleanup.add_argument(
+        "--include-test-artifacts",
+        action="store_true",
+        help="Include expired strict pytest temp roots; never changes ACLs",
+    )
     doctor = subparsers.add_parser("doctor", parents=[shared], help=command_definition("doctor").purpose)
     doctor.add_argument("--initialize-ocr-models", action="store_true")
     subparsers.add_parser("commands", parents=[shared], help=command_definition("commands").purpose)
@@ -491,7 +505,10 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
     if args.command == "commands":
         return CommandAuditWorkflow(settings).run(write_report=False)
     if args.command == "cleanup":
-        return CleanupWorkflow(settings).run(dry_run=args.dry_run)
+        return CleanupWorkflow(settings).run(
+            dry_run=args.dry_run,
+            include_test_artifacts=args.include_test_artifacts,
+        )
     if args.command == "review":
         return ReviewWorkflow(settings).run(
             dry_run=args.dry_run,
@@ -539,6 +556,14 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
             raise ConfigurationError("--max-files must be greater than zero")
         if args.ocr_dpi is not None and not 72 <= args.ocr_dpi <= 600:
             raise ConfigurationError("--ocr-dpi must be between 72 and 600")
+        if args.max_references is not None and args.max_references <= 0:
+            raise ConfigurationError("--max-references must be greater than zero")
+        if args.reference_file and args.reference_text == "never":
+            raise ConfigurationError("--reference-file requires --reference-text auto or only")
+        if args.download_missing and args.reference_text == "never":
+            raise ConfigurationError("--download-missing requires reference-text mode")
+        if args.require_download and not args.download_missing:
+            raise ConfigurationError("--require-download requires --download-missing")
         return InboxRegisterWorkflow(settings).run(
             dry_run=args.dry_run,
             max_files=args.max_files,
@@ -551,6 +576,11 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
             offline=args.offline,
             refresh=args.refresh,
             cache_write=not args.no_cache_write,
+            reference_text=args.reference_text,
+            reference_files=tuple(args.reference_file),
+            max_references=args.max_references,
+            download_missing=args.download_missing,
+            require_download=args.require_download,
         )
     return _run_search(args, settings)
 

@@ -14,6 +14,7 @@ from ..config import Settings
 from ..models import DownloadCandidate, DownloadPlan, DownloadResult
 from ..utils.filename import sanitize_filename
 from .download_validation_service import DownloadValidationService
+from .run_workspace import RunWorkspace
 
 
 StageCallback = Callable[[str, dict[str, object]], None]
@@ -36,6 +37,7 @@ class DownloadService:
         self.client = client or httpx.Client(follow_redirects=False, trust_env=False)
         self.resolver = resolver or socket.getaddrinfo
         self.validation = validation_service or DownloadValidationService()
+        self._current_result: DownloadResult | None = None
 
     @staticmethod
     def safe_url(url: str) -> str:
@@ -57,10 +59,10 @@ class DownloadService:
             item
             for item in candidates
             if item.is_direct_pdf
-            and item.provider in {"arxiv", "unpaywall"}
+            and item.provider in {"arxiv", "unpaywall", "crossref"}
             and (source == "auto" or item.provider == source)
         ]
-        provider_order = {"arxiv": 0, "unpaywall": 1}
+        provider_order = {"arxiv": 0, "unpaywall": 1, "crossref": 2}
         return min(
             eligible,
             key=lambda item: (provider_order[item.provider], item.priority),
@@ -74,6 +76,8 @@ class DownloadService:
         run_id: str,
         max_bytes: int | None = None,
         timeout_seconds: float | None = None,
+        final_directory: Path | None = None,
+        target_filename: str | None = None,
     ) -> DownloadPlan:
         self._validate_url(candidate.source_url, candidate, resolve=False)
         identifier = (
@@ -81,14 +85,23 @@ class DownloadService:
             or candidate.expected_doi
             or hashlib.sha256(candidate.source_url.encode("utf-8")).hexdigest()[:16]
         )
-        filename = sanitize_filename(f"download_{candidate.provider}_{identifier}.pdf")
+        generated = target_filename or f"download_{candidate.provider}_{identifier}.pdf"
+        filename = sanitize_filename(generated, self.settings.max_filename_length)
+        if target_filename and filename != target_filename:
+            raise ValueError("download_target_filename_is_not_safe")
         temp_root = self.settings.download_temp_dir or (
             self.settings.state_dir / "tmp"
         )
         temporary_path = temp_root / run_id / f"{filename}.part"
-        final_path = self.settings.inbox_dir / filename
+        destination = (final_directory or self.settings.inbox_dir).resolve()
+        if destination not in {
+            self.settings.inbox_dir.resolve(),
+            self.settings.registered_dir.resolve(),
+        }:
+            raise ValueError("unsafe_download_destination")
+        final_path = destination / filename
         self._require_direct_child(temporary_path, temp_root / run_id)
-        self._require_direct_child(final_path, self.settings.inbox_dir)
+        self._require_direct_child(final_path, destination)
         return DownloadPlan(
             run_id=run_id,
             candidate=candidate,
@@ -106,11 +119,20 @@ class DownloadService:
         *,
         stage_callback: StageCallback | None = None,
     ) -> DownloadResult:
+        self._current_result = None
         callback = stage_callback or (lambda _stage, _details: None)
+        workspace = RunWorkspace.create(
+            self.settings,
+            run_id=plan.run_id,
+            workflow="download",
+            artifact_type="download_partial",
+            cleanup_policy="retain_on_failure" if self.settings.keep_failed_temp else "immediate",
+        )
+        plan.temporary_path = workspace.path / f"{plan.target_filename}.part"
         part = plan.temporary_path
-        part.parent.mkdir(parents=True, exist_ok=True)
         bytes_downloaded = 0
         content_type = ""
+        outcome_status = "failed"
         callback("download_started", {"url": self.safe_url(plan.candidate.source_url)})
         try:
             current_url = plan.candidate.source_url
@@ -168,7 +190,7 @@ class DownloadService:
                 verify_identifiers=self.settings.download.verify_identifiers,
             )
             if not inspection.valid:
-                return self._failed_result(
+                return self._capture_result(self._failed_result(
                     "validation_failed",
                     plan,
                     part,
@@ -176,7 +198,7 @@ class DownloadService:
                     content_type,
                     inspection=inspection,
                     error=",".join(inspection.reasons),
-                )
+                ))
             callback(
                 "validation_passed",
                 {"pages": inspection.page_count, "identity": inspection.identity_status},
@@ -184,8 +206,8 @@ class DownloadService:
             fingerprint = self._fingerprint(part)
             if plan.final_path.exists():
                 if self._fingerprint(plan.final_path) == fingerprint:
-                    self._cleanup(part)
-                    return DownloadResult(
+                    outcome_status = "already_present"
+                    return self._capture_result(DownloadResult(
                         "already_present",
                         plan,
                         bytes_downloaded,
@@ -193,8 +215,8 @@ class DownloadService:
                         fingerprint,
                         inspection,
                         str(plan.final_path),
-                    )
-                return self._failed_result(
+                    ))
+                return self._capture_result(self._failed_result(
                     "target_collision",
                     plan,
                     part,
@@ -203,13 +225,13 @@ class DownloadService:
                     fingerprint=fingerprint,
                     inspection=inspection,
                     error="target_exists_with_different_content",
-                )
+                ))
             try:
                 self._commit_no_replace(part, plan.final_path)
             except FileExistsError:
                 if self._fingerprint(plan.final_path) == fingerprint:
-                    self._cleanup(part)
-                    return DownloadResult(
+                    outcome_status = "already_present"
+                    return self._capture_result(DownloadResult(
                         "already_present",
                         plan,
                         bytes_downloaded,
@@ -217,8 +239,8 @@ class DownloadService:
                         fingerprint,
                         inspection,
                         str(plan.final_path),
-                    )
-                return self._failed_result(
+                    ))
+                return self._capture_result(self._failed_result(
                     "target_collision",
                     plan,
                     part,
@@ -227,9 +249,18 @@ class DownloadService:
                     fingerprint=fingerprint,
                     inspection=inspection,
                     error="target_appeared_with_different_content",
-                )
-            callback("committed_to_inbox", {"path": f"Inbox/{plan.target_filename}"})
-            return DownloadResult(
+                ))
+            destination = plan.final_path.parent.name.casefold()
+            callback(
+                "committed_to_registered" if destination == "registered" else "committed_to_inbox",
+                {
+                    "path": plan.final_path.relative_to(
+                        self.settings.library_root
+                    ).as_posix()
+                },
+            )
+            outcome_status = "downloaded"
+            return self._capture_result(DownloadResult(
                 "downloaded",
                 plan,
                 bytes_downloaded,
@@ -237,21 +268,36 @@ class DownloadService:
                 fingerprint,
                 inspection,
                 str(plan.final_path),
-            )
+            ))
         except (httpx.HTTPError, OSError, ValueError, UnsafeDownloadUrl) as exc:
             safe_error = (
                 type(exc).__name__
                 if isinstance(exc, httpx.HTTPError)
                 else (str(exc) or type(exc).__name__)
             )
-            return self._failed_result(
+            return self._capture_result(self._failed_result(
                 "download_failed",
                 plan,
                 part,
                 bytes_downloaded,
                 content_type,
                 error=safe_error,
+            ))
+        finally:
+            cleanup = workspace.cleanup(
+                status=outcome_status,
+                retain=(
+                    outcome_status not in {"downloaded", "already_present"}
+                    and (
+                        self.settings.keep_failed_temp
+                        or self.settings.download.keep_failed_parts
+                    )
+                ),
             )
+            if cleanup.error and self._current_result is not None:
+                self._current_result.cleanup_error = cleanup.error
+                if not self._current_result.error:
+                    self._current_result.error = "temporary_cleanup_failed"
 
     def _validate_url(
         self,
@@ -300,13 +346,6 @@ class DownloadService:
         os.link(part, final)
         part.unlink()
 
-    def _cleanup(self, part: Path) -> None:
-        if not self.settings.download.keep_failed_parts:
-            try:
-                part.unlink(missing_ok=True)
-            except OSError:
-                pass
-
     def _failed_result(
         self,
         status: str,
@@ -319,7 +358,6 @@ class DownloadService:
         inspection=None,
         error: str = "",
     ) -> DownloadResult:
-        self._cleanup(part)
         return DownloadResult(
             status,
             plan,
@@ -330,3 +368,7 @@ class DownloadService:
             None,
             error,
         )
+
+    def _capture_result(self, result: DownloadResult) -> DownloadResult:
+        self._current_result = result
+        return result

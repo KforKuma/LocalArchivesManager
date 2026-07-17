@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lam-tools"
-version = "0.5.8"
+version = "0.5.9"
 description = "Deterministic local maintenance tools for a research literature library"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
 dependencies = [
     "filelock>=3.13",
@@ -29,12 +30,22 @@ lam = "lam.cli:main"
 [tool.setuptools.packages.find]
 where = ["LAM_tools/src"]
 
+[tool.setuptools.data-files]
+"share/doc/lam-tools" = ["README.md", "CHANGELOG.md", "LICENSE", "Workflows.md"]
+
 [tool.pytest.ini_options]
-addopts = "-q -p no:cacheprovider -m 'not live and not live_download and not ocr_live'"
+addopts = "-q -p no:cacheprovider -m 'not live and not live_provider and not live_download and not ocr_live'"
 testpaths = ["LAM_tools/tests"]
 pythonpath = ["LAM_tools/src"]
 markers = [
+    "unit: deterministic isolated unit tests",
+    "integration: isolated multi-service integration tests",
+    "regression: historical bug regression tests",
+    "slow: tests with intentionally higher local runtime",
+    "ocr: mocked or local OCR behavior tests",
+    "windows: Windows-specific behavior tests",
     "live: optional real-network provider integration tests",
+    "live_provider: optional real-network provider integration tests",
     "live_download: optional real-network open-access PDF download test",
     "ocr_live: optional real Poppler and EasyOCR integration test",
 ]

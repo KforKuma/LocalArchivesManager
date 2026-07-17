@@ -1,9 +1,9 @@
 # LAM — Local Archives Manager
 
 LAM is a deterministic local manager for a research literature library.
-Version 0.5.8 adds an extensible document-analysis interface, centralized
-candidate cleaning, multiline title/DOI reconstruction, and tracked provisional
-Inbox Documents while preserving the existing pure-CLI workflows.
+Version 0.5.9 standardizes manifested production temporary workspaces and test
+isolation, and adds conservative reference-text registration with optional
+verified open-access PDF download.
 It never reads or modifies `summary.md`.
 
 ```text
@@ -11,6 +11,7 @@ ResearchLibrary/
 |-- Inbox/          # unidentified or incomplete files
 |-- Registered/     # registered files awaiting topic filing
 |-- Topics/         # final topic namespace
+|-- Imports/        # completed reference-text batches (not Documents)
 |-- catalogue.xlsx  # Catalogue metadata + Documents file state
 `-- .library_state/ # derived snapshots, cache, reports, journals and invocations
 ```
@@ -38,7 +39,7 @@ This table is generated from the same registry returned by
 |---|---|---|---:|---:|
 | `lam init` | setup | Initialize a new empty LAM library | yes | no |
 | `lam check` | daily | Reconcile Catalogue and managed file state | yes | no |
-| `lam register` | daily | Identify and register Inbox papers and supplementary documents | yes | yes |
+| `lam register` | daily | Register Inbox PDFs, supplements, and reference text | yes | yes |
 | `lam search` | daily | Query providers and optionally update, normalize, or download records | yes | yes |
 | `lam file` | daily | File or refile registered Documents under Topics/ | yes | no |
 | `lam export` | export | Export registered citations for Zotero without modifying the library | yes | yes |
@@ -65,7 +66,8 @@ lam --root D:\NewLibrary init --dry-run
 lam --root D:\NewLibrary init --apply
 ```
 
-Apply creates `Inbox/`, `Registered/`, `Topics/`, `.library_state/`, an exact
+Apply creates `Inbox/`, `Registered/`, `Topics/`,
+`Imports/ReferenceText/Processed/`, `.library_state/`, an exact
 current-schema `catalogue.xlsx`, `library_changes.md`, and a secret-free
 `.env.example`, then commits an initial Workflow 1 baseline.
 
@@ -139,11 +141,38 @@ PDF transfer is opt-in through `search --download`, restricted to explicit
 arXiv and Unpaywall PDF locations. Downloads are streamed to managed temporary
 storage, size-limited, validated and committed to `Inbox/` without overwrite.
 
+## Reference-text registration
+
+Ordinary `lam register` ignores `.txt` files. Enable bibliography import
+explicitly:
+
+```powershell
+lam --root D:\ResearchLibrary register --reference-text auto --dry-run --json
+lam --root D:\ResearchLibrary register --reference-text only --reference-file refs1.txt --json
+lam --root D:\ResearchLibrary register --reference-text auto --download-missing --json
+```
+
+`auto` processes recognized reference lists alongside PDFs; `only` processes
+only selected or discovered `.txt` batches. Numbered, bulleted, blank-line and
+soft-wrapped references are normalized and segmented before PMID, DOI, arXiv or
+supported-title provider lookup. Ambiguous, invalid and not-found entries never
+create speculative rows. Batch and existing-Catalogue deduplication use PMID,
+DOI, arXiv ID, then title/first-author/year. The source `.txt` never creates a
+Documents row or enters Workflow 4.
+
+Completed batches move opaquely to `Imports/ReferenceText/Processed/`; partial
+batches remain in `Inbox/` and use a SHA-256 receipt so a rerun retries only
+unresolved candidates. `--download-missing` is opt-in. Verified arXiv,
+Unpaywall, or Crossref member-submitted PDF links are validated and committed
+directly to `Registered/` with a Documents row. Download absence is a warning
+unless `--require-download` is supplied; identity mismatch always requires
+review.
+
 Workflow 3 progressively uses filename/PDF metadata, bounded pypdf text and a
 title or identifier lookup before OCR. Native PDF and EasyOCR implementations
 now conform to one document-analysis request/result protocol; future layout or
 vision backends can be added without changing Workflow 3. No new large model is
-installed by 0.5.8.
+installed by 0.5.9.
 
 All local candidates are classified as `trusted`, `usable`, `weak`, or
 `rejected`. Viewer/publisher navigation, contaminated PDF metadata, truncated
@@ -195,6 +224,7 @@ lam --root D:\ResearchLibrary migrate topics --dry-run
 lam --root D:\ResearchLibrary migrate topics --apply
 lam --root D:\ResearchLibrary cleanup --dry-run
 lam --root D:\ResearchLibrary cleanup --apply
+lam --root D:\ResearchLibrary cleanup --dry-run --include-test-artifacts
 ```
 
 `migrate identifiers` detects current, supported legacy, and unknown/future
@@ -205,6 +235,12 @@ is refused. Documents migration is an internal stage of this command.
 Cleanup only applies documented retention to allowlisted machine artifacts. It
 never selects PDFs, `catalogue.xlsx`, project instructions, `summary.md`, user
 notes, topic folders, unfinished journals, or paths outside maintenance roots.
+Manifested production workspaces are cleaned immediately after closed resources;
+retained debug artifacts carry an expiry. Historical strict `pytest-*` roots
+are only eligible with `--include-test-artifacts`; cleanup never changes ACLs or
+takes ownership, and reports unreadable candidates explicitly. `status library
+--json` reports temporary directory/file/byte counts, expiry, unknown and
+unreadable artifacts.
 
 ## Configuration
 
@@ -219,7 +255,9 @@ CROSSREF_ENABLED=true
 CROSSREF_EMAIL=you@example.org
 CROSSREF_MIN_INTERVAL_SECONDS=1.0
 CROSSREF_MAX_RESULTS=10
-HTTP_USER_AGENT=LAM/0.5.8
+HTTP_USER_AGENT=LAM/0.5.9
+LAM_KEEP_FAILED_TEMP=false
+LAM_TEMP_RETENTION_HOURS=24
 OCR_ENABLED=true
 OCR_LANGUAGES=en
 OCR_DPI=250
@@ -262,4 +300,15 @@ python -m pytest -m ocr_live
 ```
 
 Ordinary tests use temporary libraries and do not touch the real Catalogue or
-PDF collection. Live tests are excluded unless explicitly selected.
+PDF collection. Session startup rejects a basetemp below the project/real
+library, masks `LIBRARY_ROOT`, refuses implicit Settings roots in test mode and
+terminates elevated Windows runs unless explicitly overridden. Live tests are
+excluded unless explicitly selected.
+
+## Stable public surface
+
+The command registry/help, JSON envelope, statuses/exit codes,
+Catalogue/Documents schema, `.env.example`, Workflow 1–4 rules, `lam init`
+layout and reference-text import behavior are public 0.5.9 contracts. Provider
+classes, cache formats, OCR images, temporary layout details, test helpers and
+private debug reports remain internal.

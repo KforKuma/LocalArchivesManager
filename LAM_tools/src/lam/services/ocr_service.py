@@ -37,6 +37,7 @@ from ..utils.identifiers import (
     merge_doi_fragments,
     parse_doi_candidate,
 )
+from .run_workspace import RunWorkspace
 from ..utils.text import normalize_title, title_candidates_from_page
 
 
@@ -179,12 +180,19 @@ class OcrService:
             result.errors.append(availability.status)
             return self._finish(result, started)
 
-        safe_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id).strip(". ")[:120]
-        safe_run_id = safe_run_id or "ocr-run"
-        temp_root = (
-            self.settings.download_temp_dir or self.settings.state_dir / "tmp"
-        ) / safe_run_id / "ocr"
-        temp_root.mkdir(parents=True, exist_ok=True)
+        workspace = RunWorkspace.create(
+            self.settings,
+            run_id=run_id,
+            workflow="ocr",
+            artifact_type=(
+                "ocr_debug_artifact"
+                if cfg.keep_debug_images
+                else "production_temporary_artifact"
+            ),
+            cleanup_policy="debug_retention" if cfg.keep_debug_images else "immediate",
+        )
+        temp_root = workspace.subdirectory("ocr")
+        images: list[Any] = []
         try:
             try:
                 images = self._render_first_page(path, temp_root, cfg)
@@ -312,8 +320,20 @@ class OcrService:
             result.warnings.append(type(exc).__name__)
             return self._finish(result, started)
         finally:
-            if not cfg.keep_debug_images:
-                shutil.rmtree(temp_root, ignore_errors=True)
+            for rendered_image in images:
+                close = getattr(rendered_image, "close", None)
+                if callable(close):
+                    close()
+            cleanup = workspace.cleanup(
+                status="completed" if result.status == "success" else "failed",
+                retain=(
+                    cfg.keep_debug_images
+                    or (self.settings.keep_failed_temp and result.status != "success")
+                ),
+            )
+            if cleanup.error:
+                result.warnings.append("ocr_temporary_cleanup_failed")
+                result.errors.append(cleanup.error)
 
     def _render_first_page(self, path: Path, output_folder: Path, cfg: OcrConfig):
         renderer = self.renderer
@@ -667,6 +687,14 @@ class OcrService:
             )
             all_blocks.extend(best_blocks)
             all_accepted.extend(best_accepted)
+            seen_images: set[int] = set()
+            for _, candidate_image in attempts:
+                if id(candidate_image) in seen_images:
+                    continue
+                seen_images.add(id(candidate_image))
+                close = getattr(candidate_image, "close", None)
+                if callable(close):
+                    close()
         visual.footer_url_detected = any(
             item.url_candidates
             for item in result.metadata_regions

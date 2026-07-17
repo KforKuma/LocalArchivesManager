@@ -95,6 +95,7 @@ class PdfService:
         previous_propagate = pypdf_logger.propagate
         pypdf_logger.propagate = False
         pypdf_logger.addHandler(handler)
+        reader = None
         try:
             reader = PdfReader(resolved, strict=False)
             result.is_encrypted = bool(reader.is_encrypted)
@@ -410,6 +411,10 @@ class PdfService:
         except Exception as exc:
             result.errors.append(f"pdf_unreadable:{type(exc).__name__}")
         finally:
+            stream = getattr(reader, "stream", None)
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
             pypdf_logger.removeHandler(handler)
             pypdf_logger.propagate = previous_propagate
             result.warnings = list(

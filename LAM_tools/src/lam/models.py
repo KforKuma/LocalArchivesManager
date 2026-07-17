@@ -145,6 +145,51 @@ class CitationExportRecord:
 
 
 @dataclass(slots=True)
+class ReferenceCandidate:
+    source_file: str
+    reference_index: int
+    raw_text: str
+    normalized_text: str
+    line_start: int
+    line_end: int
+    doi_candidates: list[str] = field(default_factory=list)
+    pmid_candidates: list[str] = field(default_factory=list)
+    arxiv_candidates: list[str] = field(default_factory=list)
+    title_candidates: list[str] = field(default_factory=list)
+    author_candidates: list[str] = field(default_factory=list)
+    year_candidates: list[str] = field(default_factory=list)
+    journal_candidates: list[str] = field(default_factory=list)
+    volume_candidates: list[str] = field(default_factory=list)
+    page_candidates: list[str] = field(default_factory=list)
+    parse_warnings: list[str] = field(default_factory=list)
+
+    def stable_key(self) -> str:
+        import hashlib
+
+        return hashlib.sha256(self.normalized_text.encode("utf-8")).hexdigest()
+
+
+@dataclass(slots=True)
+class ReferenceBatch:
+    source_file: str
+    sha256: str
+    recognized: bool
+    detection_score: int
+    candidates: list[ReferenceCandidate] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ReferenceResolution:
+    reference_index: int
+    status: str
+    paper_uuid: str = ""
+    provider_status: str = ""
+    issue: str = ""
+    download_status: str = ""
+
+
+@dataclass(slots=True)
 class FileSnapshot:
     relative_path: str
     filename: str
@@ -624,6 +669,7 @@ class DownloadResult:
     validation: DownloadedFileInspection | None = None
     final_path: str | None = None
     error: str = ""
+    cleanup_error: str = ""
 
 
 @dataclass(slots=True)

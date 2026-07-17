@@ -610,7 +610,21 @@ class MetadataQueryWorkflow:
             content_type=outcome.content_type,
             error=outcome.error,
             validation=(asdict(outcome.validation) if outcome.validation else None),
+            cleanup_error=outcome.cleanup_error,
         )
+        if outcome.cleanup_error:
+            result.failures.append(
+                {
+                    "row": row,
+                    "issue": "download_temporary_cleanup_failed",
+                    "detail": outcome.cleanup_error,
+                }
+            )
+            journal.set_operation_state(
+                row,
+                "temporary_cleanup_failed",
+                error=outcome.cleanup_error,
+            )
         if outcome.status in {"downloaded", "already_present"}:
             if target is not None:
                 today = date.today().isoformat()

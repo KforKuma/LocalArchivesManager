@@ -12,7 +12,11 @@ summary.md
 
 # Local configuration and secrets
 .env
+.env.*
+!.env.example
 LAM_tools/.env
+LAM_tools/.env.*
+!LAM_tools/.env.example
 
 # Python/build artifacts
 __pycache__/
@@ -21,6 +25,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+.coverage
+htmlcov/
 
 # Editor and Codex-local state
 /.idea/
@@ -30,4 +36,11 @@ dist/
 # Temporary files and logs
 ~$*.xlsx
 *.tmp
+*.tmp.*
+*.part
 *.log
+
+# Developer-only local material
+dev_local/
+tests/local/
+reports_local/

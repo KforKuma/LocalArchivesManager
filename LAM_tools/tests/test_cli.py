@@ -79,6 +79,29 @@ def test_parser_arguments_and_explicit_maintenance_modes():
         build_parser().parse_args(["repair-publication-types"])
 
 
+def test_register_reference_text_arguments_are_stable():
+    parsed = build_parser().parse_args(
+        [
+            "register",
+            "--reference-text",
+            "only",
+            "--reference-file",
+            "refs1.txt",
+            "--reference-file",
+            "refs2.txt",
+            "--max-references",
+            "50",
+            "--download-missing",
+            "--require-download",
+        ]
+    )
+    assert parsed.reference_text == "only"
+    assert parsed.reference_file == ["refs1.txt", "refs2.txt"]
+    assert parsed.max_references == 50
+    assert parsed.download_missing is True
+    assert parsed.require_download is True
+
+
 def test_diagnostic_help_does_not_expose_invalid_modes():
     parser = build_parser()
     action = next(item for item in parser._actions if item.dest == "command")

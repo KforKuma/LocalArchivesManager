@@ -58,10 +58,37 @@ class InboxRegisterWorkflow:
         offline: bool = False,
         refresh: bool = False,
         cache_write: bool = True,
+        reference_text: str = "never",
+        reference_files: tuple[str, ...] = (),
+        max_references: int | None = None,
+        download_missing: bool = False,
+        require_download: bool = False,
     ) -> WorkflowResult:
         from .progressive_register import ProgressiveInboxRegisterWorkflow
+        from .reference_import import ReferenceTextImportWorkflow
+        from ..services.report_service import ReportService
 
-        return ProgressiveInboxRegisterWorkflow(self).run(
+        reference_result = None
+        if reference_text != "never":
+            reference_result = ReferenceTextImportWorkflow(
+                self.settings,
+                metadata_service=self.metadata_service,
+            ).run(
+                dry_run=dry_run,
+                mode=reference_text,
+                reference_files=reference_files,
+                max_references=max_references,
+                download_missing=download_missing,
+                require_download=require_download,
+                offline=offline,
+                refresh=refresh,
+                cache_write=cache_write,
+                nested=reference_text == "auto",
+            )
+            if reference_text == "only":
+                return reference_result
+
+        result = ProgressiveInboxRegisterWorkflow(self).run(
             dry_run=dry_run,
             max_files=max_files,
             filename_only=filename_only,
@@ -74,6 +101,54 @@ class InboxRegisterWorkflow:
             refresh=refresh,
             cache_write=cache_write,
         )
+        if reference_result is None:
+            return result
+        journal_path = reference_result.details.get("operation_journal")
+        if journal_path and not dry_run:
+            from ..services.journal_service import OperationJournal
+
+            path = Path(str(journal_path))
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                OperationJournal(path, payload).finish("final_check_committed")
+            except (OSError, ValueError, TypeError) as exc:
+                reference_result.failures.append(
+                    {
+                        "issue": "reference_import_journal_finalize_failed",
+                        "detail": type(exc).__name__,
+                    }
+                )
+        result.completed = [*reference_result.completed, *result.completed]
+        result.skipped = [
+            *reference_result.skipped,
+            *[
+                item
+                for item in result.skipped
+                if not (
+                    str(item.get("file") or "").casefold().endswith(".txt")
+                    and item.get("reason") == "unsupported_document_type"
+                )
+            ],
+        ]
+        result.needs_review = [
+            *reference_result.needs_review,
+            *[
+                item for item in result.needs_review if item not in reference_result.needs_review
+            ],
+        ]
+        result.failures = [
+            *reference_result.failures,
+            *[item for item in result.failures if item not in reference_result.failures],
+        ]
+        result.changed_files += reference_result.changed_files
+        result.changed_rows += reference_result.changed_rows
+        result.state_committed = result.state_committed or reference_result.state_committed
+        result.details["reference_text"] = reference_result.to_dict()
+        for key, value in reference_result.counts.items():
+            result.counts[f"reference_{key}"] = value
+        result.finalize_status()
+        ReportService(self.settings.reports_dir).write(result)
+        return result
 
     def _discover_inbox(self) -> tuple[list[Path], list[dict[str, Any]]]:
         eligible: list[Path] = []

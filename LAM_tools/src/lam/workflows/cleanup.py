@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +16,10 @@ from ..directory_policy import DirectoryPolicy
 from ..exceptions import FileOperationError
 from ..models import WorkflowResult
 from ..services.report_service import ReportService, append_change_log
+from ..services.run_workspace import (
+    is_strict_pytest_artifact_name,
+    read_temp_manifest,
+)
 
 
 BACKUP_PATTERN = re.compile(
@@ -63,14 +69,18 @@ class CleanupWorkflow:
         self.policy = DirectoryPolicy(
             self.root, settings.reserved_root_directories
         )
+        self.plan_issues: list[dict[str, Any]] = []
 
-    def run(self, *, dry_run: bool) -> WorkflowResult:
+    def run(
+        self, *, dry_run: bool, include_test_artifacts: bool = False
+    ) -> WorkflowResult:
         result = WorkflowResult(
             "cleanup",
             dry_run=dry_run,
             mode="dry_run" if dry_run else "apply",
         )
-        candidates = self.plan()
+        candidates = self.plan(include_test_artifacts=include_test_artifacts)
+        result.skipped.extend(self.plan_issues)
         result.counts = {
             "planned_entries": len(candidates),
             "planned_files": sum(item.file_count for item in candidates),
@@ -81,6 +91,15 @@ class CleanupWorkflow:
                 item.report(self.root, "would_delete") for item in candidates
             )
             result.details["estimated_release_bytes"] = result.counts["estimated_bytes"]
+            result.details.update(
+                {
+                    "deleted": 0,
+                    "skipped": len(result.skipped),
+                    "failed": 0,
+                    "partial_success": False,
+                    "include_test_artifacts": include_test_artifacts,
+                }
+            )
             result.finalize_status()
             ReportService(self.settings.reports_dir).write(result)
             return result
@@ -111,6 +130,16 @@ class CleanupWorkflow:
             }
         )
         result.details["released_bytes"] = released
+        result.state_committed = bool(deleted)
+        result.details.update(
+            {
+                "deleted": len(deleted),
+                "skipped": len(result.skipped),
+                "failed": len(result.failures),
+                "partial_success": bool(deleted and result.failures),
+                "include_test_artifacts": include_test_artifacts,
+            }
+        )
         if deleted:
             append_change_log(
                 self.settings.changes_log_path,
@@ -125,14 +154,17 @@ class CleanupWorkflow:
         ReportService(self.settings.reports_dir).write(result)
         return result
 
-    def plan(self) -> list[CleanupCandidate]:
+    def plan(self, *, include_test_artifacts: bool = False) -> list[CleanupCandidate]:
+        self.plan_issues = []
         now = datetime.now(timezone.utc)
         candidates: list[CleanupCandidate] = []
         candidates.extend(self._backup_candidates(now))
         candidates.extend(self._report_candidates(now))
         candidates.extend(self._log_candidates())
         candidates.extend(self._journal_candidates(now))
-        candidates.extend(self._tmp_candidates(now))
+        candidates.extend(
+            self._tmp_candidates(now, include_test_artifacts=include_test_artifacts)
+        )
         candidates.extend(self._citation_export_candidates(now))
         candidates.extend(self._metadata_cache_candidates(now))
         candidates.extend(self._citation_export_cache_candidates(now))
@@ -289,18 +321,129 @@ class CleanupWorkflow:
                 results.append(candidate)
         return results
 
-    def _tmp_candidates(self, now: datetime) -> list[CleanupCandidate]:
+    def _tmp_candidates(
+        self, now: datetime, *, include_test_artifacts: bool
+    ) -> list[CleanupCandidate]:
         directory = self.settings.state_dir / "tmp"
         if not directory.is_dir():
             return []
         cutoff = now - timedelta(hours=self.TMP_MIN_AGE_HOURS)
         results = []
-        for path in directory.iterdir():
-            if path.is_symlink() or self._mtime(path) >= cutoff:
-                continue
-            candidate = self._maybe_candidate(
-                path, "temporary", "stale_temporary_artifact"
+        try:
+            entries = sorted(directory.iterdir(), key=lambda item: item.name.casefold())
+        except OSError as exc:
+            self.plan_issues.append(
+                {
+                    "issue": "cleanup_candidate_unreadable",
+                    "path": directory.relative_to(self.root).as_posix(),
+                    "detail": type(exc).__name__,
+                }
             )
+            return []
+        for path in entries:
+            relative = path.relative_to(self.root).as_posix()
+            try:
+                stale = self._mtime(path) < cutoff
+            except OSError as exc:
+                self.plan_issues.append(
+                    {
+                        "issue": "cleanup_candidate_unreadable",
+                        "path": relative,
+                        "detail": type(exc).__name__,
+                    }
+                )
+                continue
+            if path.is_symlink() or self._is_reparse_point(path):
+                self.plan_issues.append(
+                    {"issue": "unknown_temporary_artifact", "path": relative}
+                )
+                continue
+            if path.is_dir() and is_strict_pytest_artifact_name(path.name):
+                if not include_test_artifacts:
+                    self.plan_issues.append(
+                        {
+                            "issue": "test_temporary_artifact",
+                            "path": relative,
+                            "action": "skipped_requires_include_test_artifacts",
+                        }
+                    )
+                    continue
+                if not stale:
+                    self.plan_issues.append(
+                        {
+                            "issue": "test_temporary_artifact",
+                            "path": relative,
+                            "action": "skipped_within_retention",
+                        }
+                    )
+                    continue
+                structure = self._strict_pytest_structure(path)
+                if structure is None:
+                    self.plan_issues.append(
+                        {
+                            "issue": "cleanup_candidate_unreadable",
+                            "path": relative,
+                            "detail": "pytest_structure_unreadable",
+                        }
+                    )
+                    continue
+                if not structure:
+                    self.plan_issues.append(
+                        {
+                            "issue": "unknown_temporary_artifact",
+                            "path": relative,
+                            "detail": "pytest_name_without_strict_structure",
+                        }
+                    )
+                    continue
+                lock_state = self._contains_lock(path)
+                if lock_state is None:
+                    self.plan_issues.append(
+                        {
+                            "issue": "cleanup_candidate_unreadable",
+                            "path": relative,
+                            "detail": "pytest_lock_check_unreadable",
+                        }
+                    )
+                    continue
+                if self._pytest_process_active() or lock_state:
+                    self.plan_issues.append(
+                        {
+                            "issue": "test_temporary_artifact_active",
+                            "path": relative,
+                        }
+                    )
+                    continue
+                candidate = self._maybe_candidate(
+                    path,
+                    "test_temporary_artifact",
+                    "expired_strict_pytest_artifact",
+                )
+                if candidate:
+                    results.append(candidate)
+                continue
+            manifest = read_temp_manifest(path) if path.is_dir() else None
+            if not manifest:
+                self.plan_issues.append(
+                    {"issue": "unknown_temporary_artifact", "path": relative}
+                )
+                continue
+            expires = self._parse_datetime(manifest.get("expires_at"))
+            expired = bool(expires and expires <= now) or stale
+            if not expired:
+                continue
+            kind = str(manifest.get("artifact_type") or "production_temporary_artifact")
+            if kind not in {
+                "production_temporary_artifact",
+                "failed_temporary_artifact",
+                "ocr_debug_artifact",
+                "download_partial",
+            }:
+                self.plan_issues.append(
+                    {"issue": "unknown_temporary_artifact", "path": relative}
+                )
+                continue
+            candidate = self._maybe_candidate(path, kind, "expired_manifested_artifact")
             if candidate:
                 results.append(candidate)
         return results
@@ -433,7 +576,18 @@ class CleanupWorkflow:
     ) -> CleanupCandidate | None:
         try:
             return self._candidate(path, kind, reason)
-        except (OSError, FileOperationError):
+        except (OSError, FileOperationError) as exc:
+            try:
+                relative = path.relative_to(self.root).as_posix()
+            except ValueError:
+                relative = str(path)
+            self.plan_issues.append(
+                {
+                    "issue": "cleanup_candidate_unreadable",
+                    "path": relative,
+                    "detail": type(exc).__name__,
+                }
+            )
             return None
 
     def _tree_stats(self, path: Path) -> tuple[int, int]:
@@ -479,6 +633,11 @@ class CleanupWorkflow:
             "log": self.settings.logs_dir.resolve(),
             "completed_operation_journal": (self.settings.state_dir / "runs").resolve(),
             "temporary": (self.settings.state_dir / "tmp").resolve(),
+            "production_temporary_artifact": (self.settings.state_dir / "tmp").resolve(),
+            "failed_temporary_artifact": (self.settings.state_dir / "tmp").resolve(),
+            "ocr_debug_artifact": (self.settings.state_dir / "tmp").resolve(),
+            "download_partial": (self.settings.state_dir / "tmp").resolve(),
+            "test_temporary_artifact": (self.settings.state_dir / "tmp").resolve(),
             "metadata_cache": (self.settings.metadata_cache_dir or self.settings.state_dir / "metadata_cache").resolve(),
             "citation_export_cache": self.settings.citation_export_cache_dir.resolve(),
             "citation_export_temporary": self.settings.zotero_exports_dir.resolve(),
@@ -505,8 +664,57 @@ class CleanupWorkflow:
                 raise FileOperationError(f"Cleanup refuses symlinks or reparse points: {item}")
             if item.is_file():
                 name = item.name.casefold()
-                if item.suffix.casefold() == ".pdf" or name in PROTECTED_NAMES:
+                if (
+                    item.suffix.casefold() == ".pdf"
+                    and not is_strict_pytest_artifact_name(path.name)
+                ) or (
+                    name in PROTECTED_NAMES
+                    and not is_strict_pytest_artifact_name(path.name)
+                ):
                     raise FileOperationError(f"Cleanup refuses protected content: {item}")
+
+    @staticmethod
+    def _contains_lock(path: Path) -> bool | None:
+        try:
+            return any(
+                item.is_file() and item.suffix.casefold() == ".lock"
+                for item in path.rglob("*")
+            )
+        except OSError:
+            return None
+
+    @staticmethod
+    def _strict_pytest_structure(path: Path) -> bool | None:
+        try:
+            children = list(path.iterdir())
+        except OSError:
+            return None
+        if not children:
+            return False
+        return all(
+            child.name.startswith(("test_", "pytest-"))
+            or child.name in {".lock", ".pytest_cache"}
+            for child in children
+        )
+
+    @staticmethod
+    def _pytest_process_active() -> bool:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return True
+        if os.name != "nt":
+            return False
+        try:
+            completed = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq pytest.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return True
+        return "pytest.exe" in completed.stdout.casefold()
 
     @staticmethod
     def _mtime(path: Path) -> datetime:

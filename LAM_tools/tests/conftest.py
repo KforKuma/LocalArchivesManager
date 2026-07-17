@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import ctypes
+import os
 import uuid
 import hashlib
 import re
@@ -11,6 +13,55 @@ from openpyxl.styles import Font, PatternFill
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 from lam.schema import CATALOGUE_FIELDS, DOCUMENT_FIELDS
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+REAL_LIBRARY_ROOT = PROJECT_ROOT.resolve()
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _windows_elevated() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return True
+
+
+def pytest_sessionstart(session):
+    """Fail before collection if pytest infrastructure can touch the real library."""
+    allow_real = os.getenv("LAM_ALLOW_REAL_LIBRARY_TESTS", "").casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    os.environ["LAM_TESTING"] = "1"
+    os.environ["LAM_REAL_LIBRARY_ROOT"] = str(REAL_LIBRARY_ROOT)
+    if not allow_real:
+        os.environ.pop("LIBRARY_ROOT", None)
+    basetemp = session.config._tmp_path_factory.getbasetemp().resolve()
+    if not allow_real and (
+        _is_within(basetemp, REAL_LIBRARY_ROOT)
+        or _is_within(basetemp, PROJECT_ROOT)
+    ):
+        pytest.exit(
+            f"Unsafe pytest basetemp inside project/real library: {basetemp}",
+            returncode=10,
+        )
+    if not allow_real and _windows_elevated():
+        pytest.exit(
+            "LAM tests refuse an elevated Windows token by default",
+            returncode=10,
+        )
 
 
 @pytest.fixture(autouse=True)

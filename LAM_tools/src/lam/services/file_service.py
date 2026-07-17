@@ -192,6 +192,50 @@ class FileService:
             )
         self._apply_no_replace(operation, "registration")
 
+    def plan_reference_import_move(self, source: Path) -> FileOperation:
+        """Plan an opaque .txt batch move after all references reach terminal states."""
+        source = self.require_within_root(source)
+        if (
+            not source.is_file()
+            or source.parent != self.inbox_dir
+            or source.suffix.casefold() != ".txt"
+            or source.name.startswith((".", "~"))
+        ):
+            raise FileOperationError(
+                f"Reference import only moves direct visible Inbox .txt files: {source}"
+            )
+        if source.is_symlink() or self._is_reparse_point(source):
+            raise FileOperationError(f"Reference import refuses reparse content: {source}")
+        target_dir = self.require_within_root(
+            self.library_root / "Imports" / "ReferenceText" / "Processed"
+        )
+        target = self.require_within_root(target_dir / source.name)
+        stat = source.stat()
+        return FileOperation(
+            OperationType.MOVE,
+            source,
+            target,
+            0,
+            "reference_import_batch_completed",
+            expected_size=stat.st_size,
+            expected_mtime_ns=stat.st_mtime_ns,
+        )
+
+    def apply_reference_import_move(self, operation: FileOperation) -> None:
+        source = operation.source
+        assert source is not None
+        self.require_within_root(source)
+        self.require_within_root(operation.target)
+        expected_parent = (
+            self.library_root / "Imports" / "ReferenceText" / "Processed"
+        ).resolve()
+        if source.parent != self.inbox_dir or source.suffix.casefold() != ".txt":
+            raise FileOperationError("Reference import source is no longer eligible")
+        if operation.target.parent != expected_parent:
+            raise FileOperationError("Reference import target escaped Processed/")
+        operation.target.parent.mkdir(parents=True, exist_ok=True)
+        self._apply_no_replace(operation, "reference import")
+
     def plan_document_registration_move(
         self,
         source: Path,
