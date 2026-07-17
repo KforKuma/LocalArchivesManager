@@ -85,7 +85,7 @@ class CatalogueService:
             raise CatalogueError(
                 "No worksheet contains a valid 0.5.2 Catalogue schema. "
                 f"required={list(CATALOGUE_FIELDS)}; available={available}. "
-                "Use 'lam migrate-identifiers --dry-run' for a legacy workbook."
+                "Use 'lam migrate identifiers --dry-run' for a legacy workbook."
             )
         self.worksheet, self.headers = candidates[0]
         self._validate_duplicate_headers()
@@ -102,7 +102,7 @@ class CatalogueService:
         if not self.allow_legacy_schema and not self.has_documents_sheet:
             raise CatalogueError(
                 "The 0.5.2 Catalogue requires a Documents sheet. "
-                "Run 'lam migrate-identifiers --dry-run' first."
+                "Run 'lam migrate identifiers --dry-run' first."
             )
         return self.records
 

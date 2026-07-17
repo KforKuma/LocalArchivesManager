@@ -35,8 +35,8 @@ hashes, and lifecycle state exist only in `Documents`.
 Upgrade an existing workbook with:
 
 ```powershell
-lam --root D:\ResearchLibrary migrate-identifiers --dry-run
-lam --root D:\ResearchLibrary migrate-identifiers --apply
+lam --root D:\ResearchLibrary migrate identifiers --dry-run
+lam --root D:\ResearchLibrary migrate identifiers --apply
 ```
 
 Modifying commands run Catalogue preflight before network/PDF/OCR work and
@@ -134,7 +134,7 @@ date_updated
 are external identifiers only. A paper has at most one `main` document and may
 have multiple `supplementary` documents. `document_id` is stable and unique.
 
-Legacy columns are accepted only while `migrate-identifiers` plans or applies
+Legacy columns are accepted only while `migrate identifiers` plans or applies
 the upgrade. Apply validates or recovers each UUID, reconciles old PDF fields
 against Documents and the observed filesystem, validates every foreign key,
 then removes all non-schema columns only after the checks succeed. A
@@ -231,7 +231,7 @@ Root-level PDFs and unknown ordinary root directories are reported as
 `unmanaged_items` and are not scanned recursively. A Catalogue-referenced PDF
 in a historical root-level topic directory is reported as
 `legacy_topic_location`; ordinary workflows do not move it or create new
-root-level topic directories. Run `migrate-topics` explicitly to convert it.
+root-level topic directories. Run `migrate topics` explicitly to convert it.
 
 ---
 
@@ -815,8 +815,8 @@ Please review catalogue.xlsx before running Workflow 4.
 Run explicitly with:
 
 ```text
-lam --root D:\ResearchLibrary normalize-records --dry-run
-lam --root D:\ResearchLibrary normalize-records --apply
+lam --root D:\ResearchLibrary search --normalize-existing --max-records 1000 --dry-run
+lam --root D:\ResearchLibrary search --normalize-existing --max-records 1000
 ```
 
 This maintenance workflow uses existing PMID, DOI, or arXiv identifiers for
@@ -842,8 +842,8 @@ repair remains a separate explicitly requested operation.
 Run explicitly with:
 
 ```text
-lam --root D:\ResearchLibrary repair-publication-types --dry-run
-lam --root D:\ResearchLibrary repair-publication-types --apply
+lam --root D:\ResearchLibrary recover --scope publication-types --dry-run
+lam --root D:\ResearchLibrary recover --scope publication-types --apply
 ```
 
 ## Canonical publication type
@@ -937,7 +937,7 @@ Workflow 2/3 authority. It accepts only Catalogue-linked supported Documents in
 `Registered/` or visible descendants of `Topics/`. It rejects legacy
 root-level topic locations, hidden and management directories, unsupported files,
 and paths outside the library root. Legacy locations are reported with
-`legacy_topic_location` and must be handled by `migrate-topics`.
+`legacy_topic_location` and must be handled by `migrate topics`.
 
 It must not:
 
@@ -1075,8 +1075,8 @@ After Workflow 4 finishes, run Workflow 1 once in final-check mode.
 Run only when explicitly requested:
 
 ```text
-lam --root D:\ResearchLibrary migrate-topics --dry-run
-lam --root D:\ResearchLibrary migrate-topics --apply
+lam --root D:\ResearchLibrary migrate topics --dry-run
+lam --root D:\ResearchLibrary migrate topics --apply
 ```
 
 Ordinary workflows must never trigger this structural migration implicitly.
@@ -1118,6 +1118,65 @@ The final check refreshes the committed snapshot generation.
 
 ---
 
+# Initialization, review, status, recovery, and migration
+
+## Initialization
+
+`lam init --dry-run|--apply` is the only public new-library initializer. It
+accepts only an absent or demonstrably empty target and never merges or
+overwrites an existing workbook. Apply creates the standard directories, exact
+Catalogue/Documents schema, change log, and secret-free `.env.example`, then
+commits one initial Workflow 1 baseline. Initialization never contacts a
+provider, reads a PDF, or initializes OCR.
+
+## Review
+
+`lam review` requires exactly one selector (`--all`, `--paper-uuid`, or
+`--document-id`) and an explicit mode. It inventories active machine blockers,
+rechecks their objective conditions, and on apply removes only blockers whose
+conditions are provably gone. It preserves `USER_CONFIRMED`, user free text,
+`manual_tags`, `topic_folder`, and `notes`; it never approves identity or runs
+Workflow 4. Provider retry is disabled unless `--provider` is supplied.
+
+## Status
+
+The read-only status family is:
+
+```text
+lam status library
+lam status environment
+lam status commands
+lam status recovery
+lam status config
+```
+
+`doctor` aliases `status environment`; `commands` aliases `status commands`.
+Environment and command status work without an initialized workbook. Commands
+status does not create a library report. Config status exposes secret fields
+only as `configured` or `missing`.
+
+## Recovery
+
+`lam recover --dry-run|--apply` accepts scope `auto`, `workbook`, `inbox`,
+`registered`, or `publication-types`. It is for unfinished or inconsistent operations, not
+routine migration. Inbox scope re-enters Workflow 3 and is the only recovery
+scope allowed to use provider policy. Registered scope restores a Documents
+binding only from unique journal/name/hash evidence and never files it.
+Already filed documents are not re-registered, parsed, queried, renamed, or
+moved. Publication-type repair runs only when a historical mixed value is
+detected. User-owned workbook fields are never restored wholesale from an old
+backup.
+
+## Migration
+
+`lam migrate identifiers --dry-run|--apply` strictly classifies the workbook as
+current, supported legacy, or unknown/future. Current returns `no_changes`;
+unknown/future is refused. Historical Documents conversion is an internal
+stage. `lam migrate topics --dry-run|--apply` retains its separate transactional
+legacy-root-topic implementation.
+
+---
+
 # CLI execution and invocation audit
 
 Since 0.5.4, `--root`, `--json`, `--verbose`, and `--caller` are true top-level
@@ -1138,8 +1197,9 @@ version 1 with exactly one object on stdout. Exit code 2 is reserved for
 invocation is finalized in the audit log, including caught failures. Help and
 version exit before dispatch and are not audited.
 
-`lam doctor` never initializes or downloads OCR models by default. Explicit
-`doctor --initialize-ocr-models` authorization reports `uses_network=true` and
+`lam status environment` and its `lam doctor` alias never initialize or
+download OCR models by default. Explicit `--initialize-ocr-models`
+authorization reports `uses_network=true` and
 `may_download_models=true`.
 
 Every public CLI command uses one top-level `RunContext` containing the
@@ -1154,7 +1214,8 @@ Agent calls pass `--caller agent`. One sanitized JSONL record is appended to
 status, exit code, report link, change counts, and duration, but never API keys,
 `.env` contents, PDF/OCR text, or private reasoning.
 
-`lam commands --json` exposes the single public command registry used for CLI
+`lam status commands --json` and its `lam commands --json` alias expose the
+single public command registry used for CLI
 help and documentation. CLI stdout uses the stable envelope fields
 `schema_version`, `command`, `canonical_command`, `status`, `exit_code`,
 `errors`, `warnings`, `report_path`, `invocation_id`, and `details`.

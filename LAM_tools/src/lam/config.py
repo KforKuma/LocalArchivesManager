@@ -46,7 +46,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.5.4"
+    user_agent: str = "LAM/0.5.5"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,15 +157,23 @@ class Settings:
     reserved_root_directories: tuple[str, ...] = ()
 
     @classmethod
-    def from_root(cls, root: str | Path | None = None) -> "Settings":
+    def from_root(
+        cls,
+        root: str | Path | None = None,
+        *,
+        require_catalogue: bool = True,
+        allow_missing_root: bool = False,
+    ) -> "Settings":
         project_root = Path(__file__).resolve().parents[2]
         _load_optional_dotenv(project_root)
         selected = root or os.getenv("LIBRARY_ROOT") or project_root.parent
         library_root = Path(selected).expanduser().resolve()
-        if not library_root.is_dir():
+        if not library_root.exists() and not allow_missing_root:
             raise ConfigurationError(f"Library root does not exist: {library_root}")
+        if library_root.exists() and not library_root.is_dir():
+            raise ConfigurationError(f"Library root is not a directory: {library_root}")
         catalogue = library_root / "catalogue.xlsx"
-        if not catalogue.is_file():
+        if require_catalogue and not catalogue.is_file():
             raise ConfigurationError(f"Required catalogue is missing: {catalogue}")
         api_key = os.getenv("NCBI_API_KEY", "").strip()
         pubmed_interval = 0.11 if api_key else 0.36
@@ -175,7 +183,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.4").strip() or "LAM/0.5.4",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.5").strip() or "LAM/0.5.5",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
