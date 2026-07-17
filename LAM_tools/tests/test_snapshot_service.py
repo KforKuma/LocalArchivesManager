@@ -355,13 +355,13 @@ def test_compare_catalogue_matches_documents_by_document_id():
     ]
 
 
-def test_compare_catalogue_keeps_record_uid_matching_compatibility():
+def test_compare_catalogue_matches_rows_by_paper_uuid():
     previous = {
         "rows": [
             {
                 "row_number": 2,
-                "record_uid": "stable-record-uid",
-                "fields": {"record_uid": "stable-record-uid", "title": "Old"},
+                "paper_uuid": "stable-paper-uuid",
+                "fields": {"paper_uuid": "stable-paper-uuid", "title": "Old"},
             }
         ]
     }
@@ -369,8 +369,8 @@ def test_compare_catalogue_keeps_record_uid_matching_compatibility():
         "rows": [
             {
                 "row_number": 20,
-                "record_uid": "stable-record-uid",
-                "fields": {"record_uid": "stable-record-uid", "title": "New"},
+                "paper_uuid": "stable-paper-uuid",
+                "fields": {"paper_uuid": "stable-paper-uuid", "title": "New"},
             }
         ]
     }
@@ -378,7 +378,7 @@ def test_compare_catalogue_keeps_record_uid_matching_compatibility():
     assert SnapshotService.compare_catalogue(previous, current) == [
         {
             "row_number": 20,
-            "record_uid": "stable-record-uid",
+            "paper_uuid": "stable-paper-uuid",
             "change": "field_changed",
             "field": "title",
             "old": "Old",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -90,10 +91,21 @@ class ProgressiveInboxRegisterWorkflow:
         ocr_languages: tuple[str, ...] | None = None,
         ocr_dpi: int | None = None,
         ocr_gpu: str | None = None,
+        offline: bool = False,
+        refresh: bool = False,
+        cache_write: bool = True,
     ) -> WorkflowResult:
         result = WorkflowResult(
             "inbox_register", dry_run=dry_run, mode="dry_run" if dry_run else "apply"
         )
+        self.provider_offline = offline
+        self.provider_refresh = refresh
+        self.provider_cache_write = cache_write
+        result.details["provider_policy"] = {
+            "offline": offline,
+            "refresh": refresh,
+            "cache_write": cache_write,
+        }
         catalogue = CatalogueService(self.settings.catalogue_path)
         records = catalogue.load()
         snapshots = SnapshotService(self.settings.library_root, self.settings.state_dir)
@@ -1002,6 +1014,12 @@ class ProgressiveInboxRegisterWorkflow:
         for candidate_request in self.owner._lookup_requests(
             record, inspection, file_result["source_path"]
         ):
+            candidate_request = replace(
+                candidate_request,
+                offline=self.provider_offline,
+                refresh=self.provider_refresh,
+                cache_write=self.provider_cache_write,
+            )
             signature = (
                 candidate_request.doi,
                 candidate_request.pmid,

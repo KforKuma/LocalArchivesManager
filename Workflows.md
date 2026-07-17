@@ -35,8 +35,8 @@ hashes, and lifecycle state exist only in `Documents`.
 Upgrade an existing workbook with:
 
 ```powershell
-lam migrate-identifiers --root D:\ResearchLibrary --dry-run
-lam migrate-identifiers --root D:\ResearchLibrary --apply
+lam --root D:\ResearchLibrary migrate-identifiers --dry-run
+lam --root D:\ResearchLibrary migrate-identifiers --apply
 ```
 
 Modifying commands run Catalogue preflight before network/PDF/OCR work and
@@ -162,7 +162,8 @@ file-level blocker without contaminating paper-level uncertainty.
 4. Continue processing unrelated high-confidence items when one item requires review.
 5. A top-level modifying workflow runs Workflow 1 once in final-check mode after completion.
 6. Nested workflows do not run their own final checks.
-7. A dry run or preview produces reports only.
+7. A dry run or preview does not commit business state; it may write runtime
+   reports, logs, sanitized invocation records, and a temporary preflight probe.
 8. All modifications must be backed up where required and recorded in `library_changes.md`.
 
 ---
@@ -814,8 +815,8 @@ Please review catalogue.xlsx before running Workflow 4.
 Run explicitly with:
 
 ```text
-lam normalize-records --dry-run
-lam normalize-records
+lam --root D:\ResearchLibrary normalize-records --dry-run
+lam --root D:\ResearchLibrary normalize-records --apply
 ```
 
 This maintenance workflow uses existing PMID, DOI, or arXiv identifiers for
@@ -841,8 +842,8 @@ repair remains a separate explicitly requested operation.
 Run explicitly with:
 
 ```text
-lam repair-publication-types --dry-run
-lam repair-publication-types
+lam --root D:\ResearchLibrary repair-publication-types --dry-run
+lam --root D:\ResearchLibrary repair-publication-types --apply
 ```
 
 ## Canonical publication type
@@ -1074,8 +1075,8 @@ After Workflow 4 finishes, run Workflow 1 once in final-check mode.
 Run only when explicitly requested:
 
 ```text
-lam migrate-topics --dry-run
-lam migrate-topics --apply
+lam --root D:\ResearchLibrary migrate-topics --dry-run
+lam --root D:\ResearchLibrary migrate-topics --apply
 ```
 
 Ordinary workflows must never trigger this structural migration implicitly.
@@ -1119,9 +1120,32 @@ The final check refreshes the committed snapshot generation.
 
 # CLI execution and invocation audit
 
+Since 0.5.4, `--root`, `--json`, `--verbose`, and `--caller` are true top-level
+options. Prefer `lam --root D:\ResearchLibrary --caller agent --json check`;
+the historical placement after the command remains accepted during 0.5.x.
+Daily commands apply by default and use `--dry-run` for preview. Maintenance
+and migration commands require exactly one of `--dry-run` or `--apply`.
+Diagnostic commands expose neither flag.
+
+Provider-capable `register`, `search`, and normalization modes share
+`--offline`, `--refresh`, and `--no-cache-write`. Offline mode performs no
+provider request. No-cache-write also suppresses persistent provider quota
+counters. Provider-cache and OCR-cache policies are independent and reported.
+
+All JSON success, workflow failure, and parser failure output uses schema
+version 1 with exactly one object on stdout. Exit code 2 is reserved for
+`needs_review`; parser, configuration, and lock errors use 10. Every dispatched
+invocation is finalized in the audit log, including caught failures. Help and
+version exit before dispatch and are not audited.
+
+`lam doctor` never initializes or downloads OCR models by default. Explicit
+`doctor --initialize-ocr-models` authorization reports `uses_network=true` and
+`may_download_models=true`.
+
 Every public CLI command uses one top-level `RunContext` containing the
 invocation ID, caller, root, dry-run state, lock state, top-level command, and
-final-check permission. Nested workflows reuse that context: they do not
+final-check permission. Nested workflows reuse that context and its one-shot
+final-check claim: they do not
 acquire a second CLI lock, create another invocation entry, or independently
 authorize a duplicate final check.
 
@@ -1131,9 +1155,9 @@ status, exit code, report link, change counts, and duration, but never API keys,
 `.env` contents, PDF/OCR text, or private reasoning.
 
 `lam commands --json` exposes the single public command registry used for CLI
-help and documentation. Every public JSON report receives the common envelope:
-`command`, `workflow`, `version`, `caller`, `status`, `dry_run`, result lists,
-`final_check`, and `invocation_id`.
+help and documentation. CLI stdout uses the stable envelope fields
+`schema_version`, `command`, `canonical_command`, `status`, `exit_code`,
+`errors`, `warnings`, `report_path`, `invocation_id`, and `details`.
 
 ---
 
@@ -1144,8 +1168,8 @@ help and documentation. Every public JSON report receives the common envelope:
 Run only when explicitly requested:
 
 ```text
-lam cleanup --dry-run
-lam cleanup --apply
+lam --root D:\ResearchLibrary cleanup --dry-run
+lam --root D:\ResearchLibrary cleanup --apply
 ```
 
 Dry run reports each candidate, its reason, and estimated recoverable bytes

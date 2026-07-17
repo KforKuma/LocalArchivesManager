@@ -46,6 +46,17 @@ def current_run_context() -> RunContext | None:
     return _CURRENT_RUN_CONTEXT.get()
 
 
+def claim_final_check() -> bool:
+    """Claim the one final-check allowed for the active CLI invocation."""
+    context = current_run_context()
+    if context is None:
+        return True
+    if not context.final_check_allowed:
+        return False
+    context.final_check_allowed = False
+    return True
+
+
 class activate_run_context:
     def __init__(self, context: RunContext):
         self.context = context

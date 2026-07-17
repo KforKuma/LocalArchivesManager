@@ -24,9 +24,16 @@ class RecordNormalizationWorkflow:
         *,
         dry_run: bool = False,
         max_records: int = 1000,
+        offline: bool = False,
+        refresh: bool = False,
+        cache_write: bool = True,
     ) -> WorkflowResult:
         return self.delegate.run(
-            MetadataLookupRequest(),
+            MetadataLookupRequest(
+                offline=offline,
+                refresh=refresh,
+                cache_write=cache_write,
+            ),
             dry_run=dry_run,
             normalize_existing=True,
             max_records=max_records,

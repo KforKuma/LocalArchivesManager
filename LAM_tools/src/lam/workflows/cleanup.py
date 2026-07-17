@@ -48,7 +48,8 @@ class CleanupCandidate:
 
 
 class CleanupWorkflow:
-    BACKUP_KEEP_COUNT = 5
+    BACKUP_KEEP_COUNT = 10
+    BACKUP_KEEP_DAYS = 30
     REPORT_KEEP_COUNT = 200
     REPORT_KEEP_DAYS = 90
     LOG_KEEP_COUNT = 5
@@ -157,13 +158,20 @@ class CleanupWorkflow:
                 continue
             valid_backups.append(path)
         protected = self._protected_backup_paths()
+        cutoff = now - timedelta(days=self.BACKUP_KEEP_DAYS)
         results = []
         for index, path in enumerate(valid_backups):
-            if index < self.BACKUP_KEEP_COUNT or path.resolve() in protected:
+            if (
+                index < self.BACKUP_KEEP_COUNT
+                or self._mtime(path) >= cutoff
+                or path.resolve() in protected
+            ):
                 continue
             results.append(
                 self._candidate(
-                    path, "catalogue_backup", "valid_backup_beyond_recent_5"
+                    path,
+                    "catalogue_backup",
+                    "valid_backup_beyond_latest_10_and_older_than_30_days",
                 )
             )
         return results

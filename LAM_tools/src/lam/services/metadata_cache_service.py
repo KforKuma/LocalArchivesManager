@@ -90,7 +90,9 @@ class MetadataCacheService:
         )
         return path
 
-    def consume_daily_quota(self, provider: str, limit: int) -> bool:
+    def consume_daily_quota(
+        self, provider: str, limit: int, *, persist: bool = True
+    ) -> bool:
         path = self.root / provider / "daily_counts.json"
         today = datetime.now(timezone.utc).date().isoformat()
         payload: dict[str, int] = {}
@@ -104,6 +106,8 @@ class MetadataCacheService:
         count = payload.get(today, 0)
         if count >= limit:
             return False
+        if not persist:
+            return True
         payload = {today: count + 1}
         path.parent.mkdir(parents=True, exist_ok=True)
         self._atomic_bytes(

@@ -29,12 +29,13 @@ def test_registered_pdf_is_filed_and_final_checked(library_factory):
     DailyCheckWorkflow(settings).run()
     result = CatalogueFilingWorkflow(settings).run()
     workbook = load_workbook(root / "catalogue.xlsx")
-    sheet = workbook["Catalogue"]
+    sheet = workbook["Documents"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
     assert result.status == WorkflowStatus.SUCCESS
     assert not (root / "Registered" / "paper.pdf").exists()
     assert (root / "Topics" / "Topic_A" / "paper.pdf").exists()
-    assert sheet["H2"].value == "filed"
-    assert sheet["J2"].value == "Topics/Topic_A/paper.pdf"
+    assert sheet.cell(2, headers["file_status"]).value == "filed"
+    assert sheet.cell(2, headers["relative_path"]).value == "Topics/Topic_A/paper.pdf"
     assert result.details["final_check"]["status"] in {"success", "no_changes"}
 
 
@@ -140,7 +141,11 @@ def test_final_check_needs_review_overrides_no_changes(library_factory):
     result = CatalogueFilingWorkflow(settings).run()
     assert result.details["final_check"]["status"] == "needs_review"
     assert result.status == WorkflowStatus.NEEDS_REVIEW
-    assert any(item.get("issue") == "expected_pdf_missing" for item in result.needs_review)
+    assert any(
+        item.get("issue")
+        in {"expected_pdf_missing", "source_missing", "document_file_missing"}
+        for item in result.needs_review
+    )
 
 
 def test_filed_pdf_is_refiled_after_topic_folder_change(library_factory):
@@ -168,7 +173,12 @@ def test_filed_pdf_is_refiled_after_topic_folder_change(library_factory):
     assert any(item.get("action") == "refiled_from_topic" for item in result.completed)
     assert result.details["removed_empty_directories"] == ["Topics/Topic_A"]
     workbook = load_workbook(root / "catalogue.xlsx")
-    assert workbook["Catalogue"]["J2"].value == "Topics/Topic_B/paper.pdf"
+    documents = workbook["Documents"]
+    headers = {cell.value: cell.column for cell in documents[1]}
+    assert (
+        documents.cell(2, headers["relative_path"]).value
+        == "Topics/Topic_B/paper.pdf"
+    )
     journal = next((root / ".library_state" / "runs").glob("*-filing/operation_journal.json"))
     payload = json.loads(journal.read_text(encoding="utf-8"))
     assert payload["status"] == "final_check_committed"

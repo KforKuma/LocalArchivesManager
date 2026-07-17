@@ -74,7 +74,11 @@ class UnpaywallProvider:
                 query_value,
                 errors=["UNPAYWALL_EMAIL is required for Unpaywall requests."],
             )
-        if not self.cache.consume_daily_quota(self.name, self.config.daily_limit):
+        if not self.cache.consume_daily_quota(
+            self.name,
+            self.config.daily_limit,
+            persist=request.cache_write,
+        ):
             return ProviderResult(
                 self.name,
                 ProviderStatus.UNAVAILABLE,

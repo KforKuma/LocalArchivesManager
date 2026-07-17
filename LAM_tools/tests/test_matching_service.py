@@ -20,36 +20,45 @@ def inspection(*, doi=None, pmid=None, title=None, years=None, supplement=False)
 
 def records_for(library_factory, rows):
     root = library_factory(rows)
-    return root, CatalogueService(root / "catalogue.xlsx").load()
+    catalogue = CatalogueService(root / "catalogue.xlsx")
+    records = catalogue.load()
+    return root, records, catalogue.documents
 
 
 def test_path_and_filename_exact_matching(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [
             {
                 "id": "P1",
                 "title": "Example",
+                "pdf_status": "registered",
                 "pdf_filename": "standard.pdf",
-                "pdf_relative_path": "Inbox/current.pdf",
+                "pdf_relative_path": "Registered/current.pdf",
             }
         ],
     )
     matcher = MatchingService()
     by_path = matcher.match(
-        records, relative_path="Inbox/current.pdf", filename="other.pdf"
+        records,
+        relative_path="Registered/current.pdf",
+        filename="other.pdf",
+        documents=documents,
     )
     by_name = matcher.match(
-        records, relative_path="Inbox/other.pdf", filename="standard.pdf"
+        records,
+        relative_path="Inbox/other.pdf",
+        filename="standard.pdf",
+        documents=documents,
     )
-    assert by_path.matched_catalogue_id == "P1"
-    assert by_path.method == "pdf_relative_path"
-    assert by_name.matched_catalogue_id == "P1"
-    assert by_name.method == "pdf_filename"
+    assert by_path.matched_paper_uuid == records[0].get("paper_uuid")
+    assert by_path.method == "document_relative_path"
+    assert by_name.matched_paper_uuid == records[0].get("paper_uuid")
+    assert by_name.method == "document_filename"
 
 
 def test_doi_and_pmid_unique_matching(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [
             {"id": "P1", "title": "One", "doi": "10.1000/one"},
@@ -69,13 +78,13 @@ def test_doi_and_pmid_unique_matching(library_factory):
         filename="b.pdf",
         inspection=inspection(pmid="12345678"),
     )
-    assert doi.matched_catalogue_id == "P1"
+    assert doi.matched_paper_uuid == records[0].get("paper_uuid")
     assert doi.confidence == "exact_identifier"
-    assert pmid.matched_catalogue_id == "P2"
+    assert pmid.matched_paper_uuid == records[1].get("paper_uuid")
 
 
 def test_title_year_disambiguates_duplicate_titles(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [
             {"id": "P1", "title": "Shared Biomedical Title", "year": "2024"},
@@ -89,11 +98,11 @@ def test_title_year_disambiguates_duplicate_titles(library_factory):
         inspection=inspection(title="Shared Biomedical Title", years=["2025"]),
     )
     assert result.status == MatchStatus.EXACT
-    assert result.matched_catalogue_id == "P2"
+    assert result.matched_paper_uuid == records[1].get("paper_uuid")
 
 
 def test_duplicate_title_without_support_is_ambiguous(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [
             {"id": "P1", "title": "Shared Biomedical Title", "year": "2024"},
@@ -111,7 +120,7 @@ def test_duplicate_title_without_support_is_ambiguous(library_factory):
 
 
 def test_identifier_conflict_blocks(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [
             {"id": "P1", "title": "One", "doi": "10.1000/one"},
@@ -129,7 +138,7 @@ def test_identifier_conflict_blocks(library_factory):
 
 
 def test_fuzzy_title_never_auto_registers(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [{"id": "P1", "title": "A Detailed Biomedical Research Article"}],
     )
@@ -144,7 +153,7 @@ def test_fuzzy_title_never_auto_registers(library_factory):
 
 
 def test_user_confirmation_cannot_override_identifier_conflict(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [
             {"id": "P1", "title": "One", "doi": "10.1000/one"},
@@ -156,13 +165,13 @@ def test_user_confirmation_cannot_override_identifier_conflict(library_factory):
         relative_path="Inbox/a.pdf",
         filename="a.pdf",
         inspection=inspection(doi="10.1000/one"),
-        confirmed_catalogue_id="P2",
+        confirmed_paper_uuid=records[1].get("paper_uuid"),
     )
     assert result.status == MatchStatus.CONFLICT
 
 
 def test_standard_filename_title_matches_without_pdf_inspection(library_factory):
-    root, records = records_for(
+    root, records, documents = records_for(
         library_factory,
         [{"id": "P1", "title": "Standard Filename Paper", "year": "2025"}],
     )
@@ -172,5 +181,5 @@ def test_standard_filename_title_matches_without_pdf_inspection(library_factory)
         filename="Std J, 2025 - Standard Filename Paper.pdf",
     )
     assert result.status == MatchStatus.HIGH_CONFIDENCE
-    assert result.matched_catalogue_id == "P1"
+    assert result.matched_paper_uuid == records[0].get("paper_uuid")
     assert result.method == "standard_filename_title"

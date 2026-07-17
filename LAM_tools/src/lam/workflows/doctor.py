@@ -13,10 +13,17 @@ class DoctorWorkflow:
         self.settings = settings
         self.ocr_service = ocr_service or OcrService(settings)
 
-    def run(self) -> WorkflowResult:
+    def run(self, *, initialize_ocr_models: bool = False) -> WorkflowResult:
         result = WorkflowResult("doctor", mode="diagnostic")
-        availability = self.ocr_service.check_availability(deep=True)
-        result.details = {"ocr": asdict(availability)}
+        availability = self.ocr_service.check_availability(
+            deep=True,
+            initialize_models=initialize_ocr_models,
+        )
+        result.details = {
+            "ocr": asdict(availability),
+            "uses_network": bool(initialize_ocr_models),
+            "may_download_models": bool(initialize_ocr_models),
+        }
         if availability.available:
             result.completed.append({"action": "ocr_runtime_available"})
         else:

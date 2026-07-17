@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -56,7 +57,12 @@ class OcrService:
         self.renderer = renderer
         self.reader_factory = reader_factory
 
-    def check_availability(self, *, deep: bool = False) -> OcrAvailability:
+    def check_availability(
+        self,
+        *,
+        deep: bool = False,
+        initialize_models: bool = False,
+    ) -> OcrAvailability:
         pdf2image_available = importlib.util.find_spec("pdf2image") is not None
         easyocr_installed = importlib.util.find_spec("easyocr") is not None
         torch_available = importlib.util.find_spec("torch") is not None
@@ -88,13 +94,25 @@ class OcrService:
             "model_storage_dir": (
                 str(self.config.model_storage_dir) if self.config.model_storage_dir else None
             ),
-            "download_enabled": self.config.download_enabled,
+            "download_enabled": bool(initialize_models),
+            "uses_network": bool(initialize_models),
+            "may_download_models": bool(initialize_models),
             "easyocr_installed": easyocr_installed,
             "easyocr_import_probe": easyocr_available,
         }
-        if deep and status == "available":
+        if deep and status == "available" and not initialize_models:
+            # A default doctor run is a dependency probe only. Constructing an
+            # EasyOCR Reader can create or alter its model directory even when
+            # downloads are disabled, so model initialization is explicit.
+            model_available = None
+            details["reader_initialization"] = "skipped_no_model_side_effects"
+        elif deep and status == "available":
             try:
-                _, mode = self._get_reader()
+                safe_config = replace(
+                    self.config,
+                    download_enabled=True,
+                )
+                _, mode = self._get_reader(safe_config)
                 model_available = True
                 details["reader_mode"] = mode
             except FileNotFoundError:

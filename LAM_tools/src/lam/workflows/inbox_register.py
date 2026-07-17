@@ -55,6 +55,9 @@ class InboxRegisterWorkflow:
         ocr_languages: tuple[str, ...] | None = None,
         ocr_dpi: int | None = None,
         ocr_gpu: str | None = None,
+        offline: bool = False,
+        refresh: bool = False,
+        cache_write: bool = True,
     ) -> WorkflowResult:
         from .progressive_register import ProgressiveInboxRegisterWorkflow
 
@@ -67,6 +70,9 @@ class InboxRegisterWorkflow:
             ocr_languages=ocr_languages,
             ocr_dpi=ocr_dpi,
             ocr_gpu=ocr_gpu,
+            offline=offline,
+            refresh=refresh,
+            cache_write=cache_write,
         )
 
     def _discover_inbox(self) -> tuple[list[Path], list[dict[str, Any]]]:
@@ -499,7 +505,7 @@ class InboxRegisterWorkflow:
             conflicts.append("doi_catalogue_pdf_conflict")
 
         merged = MetadataRecord(
-            canonical_id=(provider.canonical_id or (str(record.get("id") or "") if record else "")),
+            canonical_id=provider.canonical_id,
             title=title,
             authors=authors,
             year=year,

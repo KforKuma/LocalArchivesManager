@@ -56,12 +56,17 @@ def test_missing_pdf_updates_machine_fields_only(library_factory):
     result = DailyCheckWorkflow(settings).run()
     workbook = load_workbook(root / "catalogue.xlsx", data_only=False)
     sheet = workbook["Catalogue"]
+    catalogue_headers = {cell.value: cell.column for cell in sheet[1]}
+    documents = workbook["Documents"]
+    document_headers = {cell.value: cell.column for cell in documents[1]}
     assert result.status == WorkflowStatus.NEEDS_REVIEW
-    assert sheet["H2"].value == "missing"
-    assert sheet["F2"].value == "keep tag"
-    assert sheet["G2"].value == "Topic_A"
-    assert sheet["L2"].value == "keep note"
-    assert "NEEDS_REVIEW: field=pdf_file" in sheet["M2"].value
+    assert documents.cell(2, document_headers["file_status"]).value == "missing"
+    assert sheet.cell(2, catalogue_headers["manual_tags"]).value == "keep tag"
+    assert sheet.cell(2, catalogue_headers["topic_folder"]).value == "Topic_A"
+    assert sheet.cell(2, catalogue_headers["notes"]).value == "keep note"
+    assert "document_file_missing" in documents.cell(
+        2, document_headers["uncertainty"]
+    ).value
 
 
 def test_dry_run_does_not_create_official_snapshots_or_modify_catalogue(library_factory):
@@ -82,7 +87,9 @@ def test_dry_run_does_not_create_official_snapshots_or_modify_catalogue(library_
     result = DailyCheckWorkflow(settings).run(dry_run=True)
     workbook = load_workbook(root / "catalogue.xlsx")
     assert result.needs_review
-    assert workbook["Catalogue"]["H2"].value == "registered"
+    documents = workbook["Documents"]
+    headers = {cell.value: cell.column for cell in documents[1]}
+    assert documents.cell(2, headers["file_status"]).value == "registered"
     assert not (root / ".library_state" / "file_manifest.json").exists()
     assert not list(root.glob("catalogue.backup.*.xlsx"))
 
@@ -108,10 +115,18 @@ def test_daily_check_reports_legacy_topic_without_scanning_unknown_roots(library
     settings = Settings.from_root(root)
     settings.ensure_runtime_directories()
     result = DailyCheckWorkflow(settings).run(dry_run=True)
-    assert any(item.get("issue") == "legacy_topic_location" for item in result.needs_review)
+    assert any(
+        item.get("issue") == "document_file_missing"
+        for item in result.needs_review
+    )
     assert result.counts["managed_pdfs"] == 1
     unmanaged = result.details["unmanaged_items"]
     assert {item["path"] for item in unmanaged} >= {"Topic_A", "Unknown"}
+    assert any(
+        item["path"] == "Topic_A"
+        and item["classification"] == "legacy_topic_location"
+        for item in unmanaged
+    )
 
 
 def test_filed_status_requires_topics_relative_topic_match(library_factory):
@@ -133,4 +148,6 @@ def test_filed_status_requires_topics_relative_topic_match(library_factory):
     result = DailyCheckWorkflow(settings).run()
     assert result.status == WorkflowStatus.SUCCESS
     workbook = load_workbook(root / "catalogue.xlsx")
-    assert workbook["Catalogue"]["H2"].value == "filed"
+    documents = workbook["Documents"]
+    headers = {cell.value: cell.column for cell in documents[1]}
+    assert documents.cell(2, headers["file_status"]).value == "filed"

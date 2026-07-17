@@ -10,6 +10,7 @@ from ..config import Settings
 from ..directory_policy import DirectoryPolicy, RootDirectoryKind
 from ..exceptions import FileOperationError
 from ..models import DiffType, FileSnapshot, PdfStatus, WorkflowResult
+from ..run_context import claim_final_check
 from ..services.catalogue_service import CatalogueService
 from ..services.report_service import ReportService, append_change_log
 from ..services.snapshot_service import SnapshotService
@@ -22,6 +23,11 @@ class DailyCheckWorkflow:
 
     def run(self, *, dry_run: bool = False, final_check: bool = False) -> WorkflowResult:
         result = WorkflowResult("daily_check", dry_run=dry_run)
+        if final_check and not claim_final_check():
+            result.mode = "final_check"
+            result.details["skipped"] = "final_check_already_claimed"
+            result.finalize_status()
+            return result
         catalogue = CatalogueService(self.settings.catalogue_path)
         records = catalogue.load()
         snapshots = SnapshotService(

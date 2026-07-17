@@ -374,6 +374,16 @@ class CatalogueFilingWorkflow:
                     self.settings.library_root
                 ).as_posix()
                 removed_directories.append(relative_directory)
+                if journal:
+                    for _paper_uuid, document, operation, _source_kind in moved:
+                        if operation.source.parent == old_directory:
+                            journal.set_operation_state(
+                                operation.catalogue_row,
+                                "catalogue_committed",
+                                document_id=str(document.get("document_id") or ""),
+                                old_directory_removed=True,
+                                old_directory=relative_directory,
+                            )
                 result.completed.append(
                     {
                         "action": "removed_empty_topic_directory",

@@ -60,6 +60,7 @@ class CatalogueService:
         self.review_decisions: set[str] = set()
         self.maintenance_actions: list[dict[str, Any]] = []
         self.preflight_token: CatalogueStatToken | None = None
+        self.schema_dirty = False
 
     def load(self) -> list[CatalogueRecord]:
         self.preflight_token = CatalogueStatToken.capture(self.path)
@@ -375,6 +376,7 @@ class CatalogueService:
             target.number_format = source.number_format
             target.protection = copy(source.protection)
         self.headers[field_name] = column
+        self.schema_dirty = True
         for record in self.records:
             record.values.setdefault(field_name, None)
         return column
@@ -402,7 +404,12 @@ class CatalogueService:
             field_name: index for index, field_name in enumerate(DOCUMENT_FIELDS, start=1)
         }
         self.documents = []
+        self.schema_dirty = True
         return sheet
+
+    def mark_schema_dirty(self) -> None:
+        """Mark an in-memory sheet/header/column structure change for saving."""
+        self.schema_dirty = True
 
     def ensure_paper_uuid(self, record: CatalogueRecord) -> str:
         current = str(record.get("paper_uuid") or "").strip()
@@ -922,7 +929,7 @@ class CatalogueService:
         }
 
     def save_atomic(self) -> Path | None:
-        if not self.changes and not self.document_changes:
+        if not self.changes and not self.document_changes and not self.schema_dirty:
             return None
         if self.workbook is None:
             raise CatalogueError("Catalogue must be loaded before it can be saved")
@@ -943,18 +950,6 @@ class CatalogueService:
             verification.load()
             if verification.workbook is not None:
                 verification.workbook.close()
-            # Retention is post-commit maintenance. A cleanup failure must be
-            # reported, but must never roll back an already validated save.
-            try:
-                self._prune_valid_backups(keep=5)
-            except Exception as exc:
-                self.maintenance_actions.append(
-                    {
-                        "action": "catalogue_backup_cleanup_failed",
-                        "path": str(self.path.parent),
-                        "error": str(exc),
-                    }
-                )
             return backup
         except Exception as exc:
             if temporary.exists():
@@ -1003,76 +998,3 @@ class CatalogueService:
                         "new_value": change.new_value,
                     }
                 )
-
-    def _prune_valid_backups(self, *, keep: int) -> None:
-        pattern = re.compile(
-            r"^catalogue\.backup\.\d{8}-\d{6}(?:-\d{2})?\.xlsx$",
-            re.IGNORECASE,
-        )
-        protected = self._journal_protected_backups()
-        valid: list[Path] = []
-        for candidate in self.path.parent.glob("catalogue.backup.*.xlsx"):
-            if not pattern.fullmatch(candidate.name):
-                continue
-            try:
-                workbook = load_workbook(candidate, read_only=True)
-                workbook.close()
-            except Exception:
-                continue
-            valid.append(candidate)
-        valid.sort(key=lambda item: (item.stat().st_mtime_ns, item.name), reverse=True)
-        retained = set(valid[: max(0, keep)]) | protected
-        for candidate in valid:
-            if candidate in retained:
-                continue
-            try:
-                size = candidate.stat().st_size
-                candidate.unlink()
-                self.maintenance_actions.append(
-                    {
-                        "action": "deleted_catalogue_backup",
-                        "path": str(candidate),
-                        "bytes": size,
-                        "reason": f"valid_backup_beyond_recent_{keep}",
-                    }
-                )
-            except OSError as exc:
-                self.maintenance_actions.append(
-                    {
-                        "action": "catalogue_backup_cleanup_failed",
-                        "path": str(candidate),
-                        "error": str(exc),
-                    }
-                )
-
-    def _journal_protected_backups(self) -> set[Path]:
-        protected: set[Path] = set()
-        runs_dir = self.path.parent / ".library_state" / "runs"
-        if not runs_dir.is_dir():
-            return protected
-        for journal_path in runs_dir.glob("*/operation_journal.json"):
-            try:
-                import json
-
-                payload = json.loads(journal_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if payload.get("status") == "final_check_committed":
-                continue
-            values = [payload]
-            while values:
-                value = values.pop()
-                if isinstance(value, dict):
-                    values.extend(value.values())
-                elif isinstance(value, list):
-                    values.extend(value)
-                elif isinstance(value, str) and "catalogue.backup." in value:
-                    candidate = Path(value)
-                    if not candidate.is_absolute():
-                        candidate = self.path.parent / candidate.name
-                    try:
-                        candidate.resolve().relative_to(self.path.parent.resolve())
-                    except ValueError:
-                        continue
-                    protected.add(candidate)
-        return protected

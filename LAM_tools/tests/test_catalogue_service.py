@@ -9,8 +9,8 @@ from lam.exceptions import CatalogueError
 from lam.services.catalogue_service import CatalogueService
 
 
-def test_targeted_write_preserves_sheet_style_and_extra_content(library_factory):
-    root = library_factory(
+def test_targeted_write_preserves_sheet_style_and_extra_content(current_library_factory):
+    root = current_library_factory(
         [
             {
                 "id": "P1",
@@ -27,30 +27,31 @@ def test_targeted_write_preserves_sheet_style_and_extra_content(library_factory)
     )
     service = CatalogueService(root / "catalogue.xlsx")
     record = service.load()[0]
-    service.update_fields(record, {"pdf_status": "missing"})
+    service.update_fields(record, {"authors": "Example Author"})
     backup = service.save_atomic()
 
     assert backup and backup.exists()
     workbook = load_workbook(root / "catalogue.xlsx")
     sheet = workbook["Catalogue"]
-    assert sheet["H2"].value == "missing"
-    assert sheet["F2"].value == "keep"
-    assert sheet["L2"].value == "user note"
-    assert sheet["N2"].value == "custom"
+    headers = {cell.value: index + 1 for index, cell in enumerate(sheet[1])}
+    assert sheet.cell(2, headers["authors"]).value == "Example Author"
+    assert sheet.cell(2, headers["manual_tags"]).value == "keep"
+    assert sheet.cell(2, headers["notes"]).value == "user note"
+    assert sheet.cell(2, headers["custom_column"]).value == "custom"
     assert sheet["A1"].font.bold is True
     assert workbook["Other sheet"]["A1"].value == "preserve me"
 
 
-def test_user_controlled_field_cannot_be_overwritten(library_factory):
-    root = library_factory([{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}])
+def test_user_controlled_field_cannot_be_overwritten(current_library_factory):
+    root = current_library_factory([{"title": "Example", "topic_folder": "Topic_A"}])
     service = CatalogueService(root / "catalogue.xlsx")
     record = service.load()[0]
     with pytest.raises(CatalogueError):
         service.update_fields(record, {"topic_folder": "Topic_B"})
 
 
-def test_uncertainty_is_deduplicated_and_confirmation_is_preserved(library_factory):
-    root = library_factory(
+def test_uncertainty_is_deduplicated_and_confirmation_is_preserved(current_library_factory):
+    root = current_library_factory(
         [
             {
                 "id": "P1",
@@ -89,18 +90,18 @@ def test_uncertainty_is_deduplicated_and_confirmation_is_preserved(library_facto
     assert value.count("PDF missing") == 1
 
 
-def test_rapid_successive_writes_never_overwrite_a_backup(library_factory):
-    root = library_factory(
-        [{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}]
+def test_rapid_successive_writes_never_overwrite_a_backup(current_library_factory):
+    root = current_library_factory(
+        [{"title": "Example", "topic_folder": "Topic_A"}]
     )
     first = CatalogueService(root / "catalogue.xlsx")
     first_record = first.load()[0]
-    first.update_fields(first_record, {"pdf_status": "missing"})
+    first.update_fields(first_record, {"auto_tags": "first"})
     first_backup = first.save_atomic()
 
     second = CatalogueService(root / "catalogue.xlsx")
     second_record = second.load()[0]
-    second.update_fields(second_record, {"pdf_status": "registered"})
+    second.update_fields(second_record, {"auto_tags": "second"})
     second_backup = second.save_atomic()
 
     assert first_backup != second_backup
@@ -109,8 +110,8 @@ def test_rapid_successive_writes_never_overwrite_a_backup(library_factory):
     assert len(list(root.glob("catalogue.backup.*.xlsx"))) == 2
 
 
-def test_one_active_review_per_field_and_empty_confirmation_resolves_it(library_factory):
-    root = library_factory([{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}])
+def test_one_active_review_per_field_and_empty_confirmation_resolves_it(current_library_factory):
+    root = current_library_factory([{"title": "Example", "topic_folder": "Topic_A"}])
     service = CatalogueService(root / "catalogue.xlsx")
     record = service.load()[0]
     first = service.ensure_review_blocker(
@@ -140,8 +141,8 @@ def test_one_active_review_per_field_and_empty_confirmation_resolves_it(library_
     assert "USER_CONFIRMED:" in str(record.get("uncertainty"))
 
 
-def test_user_cleared_review_is_remembered_by_snapshot(library_factory):
-    root = library_factory([{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}])
+def test_user_cleared_review_is_remembered_by_snapshot(current_library_factory):
+    root = current_library_factory([{"title": "Example", "topic_folder": "Topic_A"}])
     first = CatalogueService(root / "catalogue.xlsx")
     record = first.load()[0]
     first.ensure_review_blocker(record, "pdf_file", "PDF missing", issue_key="missing")
@@ -149,7 +150,8 @@ def test_user_cleared_review_is_remembered_by_snapshot(library_factory):
     first.save_atomic()
 
     workbook = load_workbook(root / "catalogue.xlsx")
-    workbook["Catalogue"]["M2"] = None
+    headers = {cell.value: index + 1 for index, cell in enumerate(workbook["Catalogue"][1])}
+    workbook["Catalogue"].cell(2, headers["uncertainty"]).value = None
     workbook.save(root / "catalogue.xlsx")
 
     second = CatalogueService(root / "catalogue.xlsx")
@@ -162,8 +164,8 @@ def test_user_cleared_review_is_remembered_by_snapshot(library_factory):
     assert not record.get("uncertainty")
 
 
-def test_blank_bibliographic_field_can_be_filled_but_not_overwritten(library_factory):
-    root = library_factory([{"id": "P1", "title": "", "topic_folder": "Topic_A"}])
+def test_blank_bibliographic_field_can_be_filled_but_not_overwritten(current_library_factory):
+    root = current_library_factory([{"title": "", "topic_folder": "Topic_A"}])
     service = CatalogueService(root / "catalogue.xlsx")
     record = service.load()[0]
     service.update_fields(record, {"title": "Confirmed Title"})
@@ -171,26 +173,21 @@ def test_blank_bibliographic_field_can_be_filled_but_not_overwritten(library_fac
         service.update_fields(record, {"title": "Conflicting Title"})
 
 
-def test_backup_retention_failure_does_not_rollback_valid_save(
-    library_factory, monkeypatch
-):
-    root = library_factory(
-        [{"id": "P1", "title": "Example", "topic_folder": "Topic_A"}]
-    )
+def test_normal_save_never_prunes_existing_backups(current_library_factory):
+    root = current_library_factory([{"title": "", "topic_folder": "Topic_A"}])
+    existing = []
+    for index in range(12):
+        path = root / f"catalogue.backup.202501{index + 1:02d}-010101.xlsx"
+        path.write_bytes((root / "catalogue.xlsx").read_bytes())
+        existing.append(path)
     service = CatalogueService(root / "catalogue.xlsx")
     record = service.load()[0]
-    service.update_fields(record, {"pdf_status": "registered"})
+    service.update_fields(record, {"title": "Example"})
 
-    def fail_retention(*, keep: int) -> None:
-        raise OSError(f"retention failed for keep={keep}")
-
-    monkeypatch.setattr(service, "_prune_valid_backups", fail_retention)
     backup = service.save_atomic()
 
     assert backup is not None and backup.exists()
     reloaded = CatalogueService(root / "catalogue.xlsx")
-    assert reloaded.load()[0].get("pdf_status") == "registered"
-    assert any(
-        item.get("action") == "catalogue_backup_cleanup_failed"
-        for item in service.maintenance_actions
-    )
+    assert reloaded.load()[0].get("title") == "Example"
+    assert all(path.exists() for path in existing)
+    assert service.maintenance_actions == []

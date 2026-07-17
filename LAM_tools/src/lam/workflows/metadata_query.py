@@ -236,7 +236,7 @@ class MetadataQueryWorkflow:
                     if changed:
                         item = {
                             "row": selected_target.row_number,
-                            "id": selected_target.get("id"),
+                            "paper_uuid": selected_target.get("paper_uuid"),
                             "fields": changed,
                         }
                         records_updated.append(item)
@@ -247,7 +247,7 @@ class MetadataQueryWorkflow:
                     else:
                         item = {
                             "row": selected_target.row_number,
-                            "id": selected_target.get("id"),
+                            "paper_uuid": selected_target.get("paper_uuid"),
                         }
                         records_unchanged.append(item)
                         query_report["catalogue_action"] = "unchanged"
@@ -256,7 +256,7 @@ class MetadataQueryWorkflow:
                     new_record = catalogue.add_record(values)
                     item = {
                         "row": new_record.row_number,
-                        "id": new_record.get("id"),
+                        "paper_uuid": new_record.get("paper_uuid"),
                         "canonical_id": metadata.canonical_id,
                     }
                     records_added.append(item)
@@ -366,6 +366,11 @@ class MetadataQueryWorkflow:
         }
         result.details = {
             "version": __version__,
+            "provider_policy": {
+                "offline": request.offline,
+                "refresh": request.refresh,
+                "cache_write": request.cache_write,
+            },
             "queries": query_reports,
             "providers": provider_summary,
             "cache": {"hits": cache_hits, "misses": cache_misses},
@@ -456,7 +461,7 @@ class MetadataQueryWorkflow:
                     operation.get("catalogue_row"), "catalogue_committed"
                 )
 
-        if (catalogue.changes or result.changed_files) and not nested:
+        if catalogue.changes or result.changed_files:
             final_check = DailyCheckWorkflow(self.settings).run(
                 dry_run=False, final_check=True
             )

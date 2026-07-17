@@ -1,7 +1,7 @@
 # LAM — Local Archives Manager
 
 LAM provides deterministic local maintenance for a biomedical literature
-library stored alongside the source repository. Version 0.5.3 implements
+library stored alongside the source repository. Version 0.5.4 implements
 Workflow 1 (local reconciliation), Workflow 2 (network metadata lookup),
 Workflow 3 (Inbox identification and registration), and Workflow 4 (filing by
 the user-controlled `topic_folder`), including safe re-filing after a topic
@@ -57,53 +57,48 @@ The following table is generated from the same registry used by CLI help and
 | `lam migrate-topics` | maintenance | Move legacy root topic directories into Topics/ | yes | no |
 | `lam migrate-documents` | maintenance | Create Documents sheet and migrate legacy main PDFs | yes | no |
 | `lam migrate-identifiers` | maintenance | Adopt paper_uuid and remove legacy Catalogue identity/file columns | yes | no |
-| `lam doctor` | maintenance | Check OCR and local runtime availability | no | no |
+| `lam doctor` | diagnostic | Check OCR and local runtime availability | no | yes |
 | `lam commands` | audit | List the public CLI command registry | no | no |
 
 ```powershell
-lam check --root D:\ResearchLibrary --dry-run
-lam check --root D:\ResearchLibrary --json
-lam register --root D:\ResearchLibrary --dry-run
-lam register --root D:\ResearchLibrary --max-files 5
-lam register --root D:\ResearchLibrary --filename-only
-lam register --root D:\ResearchLibrary --ocr auto
-lam register --root D:\ResearchLibrary --ocr always --ocr-dpi 250 --dry-run
-lam register --root D:\ResearchLibrary --ocr never
-lam doctor --root D:\ResearchLibrary --json
-lam repair-publication-types --root D:\ResearchLibrary --dry-run
-lam repair-publication-types --root D:\ResearchLibrary
-lam normalize-records --root D:\ResearchLibrary --dry-run
-lam normalize-records --root D:\ResearchLibrary
-lam search --root D:\ResearchLibrary --pmid 34265844 --dry-run
-lam search --root D:\ResearchLibrary --doi 10.1038/s41586-021-03819-2 --dry-run
-lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --dry-run
-lam search --root D:\ResearchLibrary --row 25
-lam search --root D:\ResearchLibrary --paper-uuid 12345678-1234-4234-9234-123456789abc
-lam search --root D:\ResearchLibrary --missing-metadata --max-records 25
-lam search --root D:\ResearchLibrary --incomplete-records --max-records 25
-lam search --root D:\ResearchLibrary --normalize-existing --max-records 25
-lam search --root D:\ResearchLibrary --doi 10.1000/example --offline
-lam search --root D:\ResearchLibrary --arxiv-id 1706.03762 --download
-lam search --root D:\ResearchLibrary --doi 10.1000/example --download --download-source unpaywall
-lam search --root D:\ResearchLibrary --doi 10.1000/example --download --dry-run
-lam file --root D:\ResearchLibrary --dry-run
-lam file --root D:\ResearchLibrary --json
-lam migrate-topics --root D:\ResearchLibrary --dry-run
-lam migrate-topics --root D:\ResearchLibrary --apply
-lam migrate-documents --root D:\ResearchLibrary --dry-run
-lam migrate-documents --root D:\ResearchLibrary --apply
-lam migrate-identifiers --root D:\ResearchLibrary --dry-run
-lam migrate-identifiers --root D:\ResearchLibrary --apply
-lam cleanup --root D:\ResearchLibrary --dry-run
-lam cleanup --root D:\ResearchLibrary --apply
-lam commands --root D:\ResearchLibrary --json
-lam check --root D:\ResearchLibrary --caller agent --json
+lam --root D:\ResearchLibrary check --dry-run
+lam --root D:\ResearchLibrary --json check
+lam --root D:\ResearchLibrary register --dry-run --offline --no-cache-write
+lam --root D:\ResearchLibrary register --max-files 5
+lam --root D:\ResearchLibrary register --filename-only
+lam --root D:\ResearchLibrary register --ocr auto
+lam --root D:\ResearchLibrary register --ocr always --ocr-dpi 250 --dry-run
+lam --root D:\ResearchLibrary doctor
+lam --root D:\ResearchLibrary doctor --initialize-ocr-models
+lam --root D:\ResearchLibrary repair-publication-types --dry-run
+lam --root D:\ResearchLibrary repair-publication-types --apply
+lam --root D:\ResearchLibrary normalize-records --dry-run --offline
+lam --root D:\ResearchLibrary normalize-records --apply
+lam --root D:\ResearchLibrary search --pmid 34265844 --dry-run
+lam --root D:\ResearchLibrary search --paper-uuid 12345678-1234-4234-9234-123456789abc
+lam --root D:\ResearchLibrary search --normalize-existing --max-records 25
+lam --root D:\ResearchLibrary search --doi 10.1000/example --offline --no-cache-write
+lam --root D:\ResearchLibrary search --arxiv-id 1706.03762 --download
+lam --root D:\ResearchLibrary file --dry-run
+lam --root D:\ResearchLibrary --json file
+lam --root D:\ResearchLibrary migrate-topics --dry-run
+lam --root D:\ResearchLibrary migrate-topics --apply
+lam --root D:\ResearchLibrary migrate-documents --dry-run
+lam --root D:\ResearchLibrary migrate-documents --apply
+lam --root D:\ResearchLibrary migrate-identifiers --dry-run
+lam --root D:\ResearchLibrary migrate-identifiers --apply
+lam --root D:\ResearchLibrary cleanup --dry-run
+lam --root D:\ResearchLibrary cleanup --apply
+lam --root D:\ResearchLibrary --json commands
+lam --root D:\ResearchLibrary --caller agent --json check
 ```
 
-`search --dry-run` performs real provider queries and may update the metadata
-cache, but does not modify the catalogue, snapshots, files, change log, or
-operation journal. Add `--no-cache-write` for a fully read-only query, or
-`--offline` to use only valid cached responses.
+Provider-capable commands (`register`, `search`, and `normalize-records`)
+support `--offline`, `--refresh`, and `--no-cache-write`. `--offline` performs
+no provider requests. `--no-cache-write` suppresses metadata-cache entries and
+persistent quota counters. A provider dry run may still use the network unless
+`--offline` is selected; OCR cache writes remain a separate policy and are
+disabled by registration dry runs.
 
 PDF transfer is separately opt-in through `search --download`. Eligible links
 are limited to official arXiv PDF links and explicit Unpaywall `url_for_pdf`
@@ -181,11 +176,12 @@ sources and runs one final check. It never invokes
 Workflow 4 or moves PDFs. Filename changes implied by canonical metadata are
 reported as a separate plan only.
 
-`lam doctor` checks pdf2image, Poppler, EasyOCR, Torch/CUDA, local model
-availability, and temporary-directory access. EasyOCR model downloads are
-disabled by default (`OCR_DOWNLOAD_ENABLED=false`), so Workflow 3 never starts
-an implicit large download. If an explicit one-time initialization is desired,
-temporarily enable that setting and run `lam doctor`, then disable it again.
+`lam doctor` checks pdf2image, Poppler, EasyOCR, Torch/CUDA, and temporary
+directory access without initializing a Reader, modifying the model directory,
+or using the network. Explicit model initialization is separately authorized by
+`lam doctor --initialize-ocr-models`; its report states
+`uses_network=true` and `may_download_models=true`. Workflow 3 never starts an
+implicit model download.
 
 `publication_type` stores one canonical special genre only. Ordinary research
 articles and provider/index labels such as `Journal Article`,
@@ -238,7 +234,7 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.5.3
+HTTP_USER_AGENT=LAM/0.5.4
 RESERVED_ROOT_DIRECTORIES=
 DOWNLOAD_ENABLED=true
 DOWNLOAD_MAX_BYTES=157286400
@@ -264,12 +260,13 @@ same-stem binding. Successful files move to `Registered/`, a recoverable
 operation journal is written, and one final Workflow 1 check runs. Workflow 4
 is never invoked automatically.
 
-A dry run may write a report and
-debug log under `.library_state`, but it does not modify the catalogue, managed
-PDFs, official snapshots, operation journals, or `library_changes.md`.
+A dry run previews business-state changes. It may write a report, debug log,
+sanitized invocation record, and a short-lived Catalogue preflight probe under
+the library; it does not commit the Catalogue, managed files, official
+snapshots, operation journals, or `library_changes.md`.
 
-Exit codes are `0` for success, `2` for completed work with review items, `3`
-for no changes, `10` for configuration errors, `20` for catalogue errors,
+Exit codes are `0` for success, `2` only for completed work with review items,
+`3` for no changes, `10` for parser/configuration/lock errors, `20` for catalogue errors,
 `30` for file-operation failures, and `40` for provider/network failures.
 
 ## Test
