@@ -344,6 +344,8 @@ class ProgressiveInboxRegisterWorkflow:
                     record, identity_confirmed, issue_key, issue, attempts = outcome
                     lookup_count += attempts
                     last_lookup_issue, last_lookup_detail = issue_key, issue
+                    if identity_confirmed and inspection.ocr_result is None:
+                        file_result["ocr_skipped_after_provider_match"] = True
 
                 provider_requires_regating = self._provider_failure_requires_ocr(
                     file_result
@@ -381,6 +383,7 @@ class ProgressiveInboxRegisterWorkflow:
                             ocr_trigger_reason=ocr_trigger_reason,
                             run_id=run_id,
                             ocr_cache_write=not dry_run,
+                            visual_analysis=True,
                         )
                         file_result["inspection_level_used"] = InspectionLevel.OCR.value
                         self._set_inspection_report(file_result, inspection)
@@ -1032,6 +1035,10 @@ class ProgressiveInboxRegisterWorkflow:
             request = candidate_request
             lookup = self.metadata_service.lookup(request)
             attempts_made += 1
+            if request.title and inspection.ocr_result is None:
+                file_result["title_lookup_before_ocr"] = True
+            if "crossref" in lookup.providers_used:
+                file_result["crossref_queries"] += 1
             attempt = {
                 "candidate_source": request.candidate_source,
                 "query_type": (
@@ -1054,6 +1061,16 @@ class ProgressiveInboxRegisterWorkflow:
                 MetadataLookupStatus.UNAVAILABLE: "metadata_provider_unavailable",
                 MetadataLookupStatus.FAILED: "metadata_provider_failed",
             }.get(lookup.status, "metadata_query_ambiguous")
+            crossref_issue = next(
+                (
+                    key
+                    for key in [*lookup.conflicts, *lookup.errors]
+                    if str(key).startswith("crossref_")
+                ),
+                "",
+            )
+            if crossref_issue:
+                last_key = crossref_issue
             last_detail = (
                 lookup.selection_reason or "; ".join(lookup.errors) or PROVISIONAL_BLOCKER
             )
@@ -1786,6 +1803,17 @@ class ProgressiveInboxRegisterWorkflow:
             "selected_title_source": "filename" if evidence.title_candidate else "",
             "title_candidate_sources": ["filename"] if evidence.title_candidate else [],
             "provider_lookup_attempts": [],
+            "title_lookup_before_ocr": False,
+            "crossref_queries": 0,
+            "metadata_regions_ocr": [],
+            "doi_candidate_sources": [],
+            "footer_url_detected": False,
+            "ocr_candidate_corrected": False,
+            "ocr_skipped_after_provider_match": False,
+            "pdf_visual_type": None,
+            "full_page_image_detected": False,
+            "repeated_chrome_detected": False,
+            "content_crop_applied": False,
             "canonical_title_selected": "",
             "canonical_title_source": "",
             "match_evidence": {},
@@ -1814,6 +1842,29 @@ class ProgressiveInboxRegisterWorkflow:
         file_result["ocr_candidate"] = self._candidate_dict(ocr)
         sources = [item.source_type for item in inspection.title_candidates]
         file_result["title_candidate_sources"] = list(dict.fromkeys(sources))
+        file_result["doi_candidate_sources"] = list(
+            dict.fromkeys(item.source_type for item in inspection.doi_candidates)
+        )
+        visual = inspection.visual_inspection
+        if visual is not None:
+            file_result.update(
+                {
+                    "pdf_visual_type": visual.pdf_visual_type.value,
+                    "full_page_image_detected": visual.full_page_image_detected,
+                    "repeated_chrome_detected": visual.repeated_chrome_detected,
+                    "content_crop_applied": visual.content_crop_applied,
+                    "footer_url_detected": visual.footer_url_detected,
+                }
+            )
+        if inspection.ocr_result is not None:
+            file_result["metadata_regions_ocr"] = [
+                item.report_summary()
+                for item in inspection.ocr_result.metadata_regions
+            ]
+            file_result["ocr_candidate_corrected"] = any(
+                item.source_type == "ocr_corrected"
+                for item in inspection.ocr_result.doi_candidates
+            )
 
     @staticmethod
     def _set_match_report(file_result: dict[str, Any], match) -> None:

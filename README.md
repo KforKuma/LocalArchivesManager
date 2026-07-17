@@ -1,8 +1,8 @@
 # LAM — Local Archives Manager
 
-LAM is a deterministic local manager for a biomedical literature library.
-Version 0.5.6 adds read-only, Zotero-compatible citation export to the pure-CLI
-initialization, review, status, recovery, migration and Workflow 1–4 commands.
+LAM is a deterministic local manager for a research literature library.
+Version 0.5.7 adds Crossref metadata lookup and bounded recognition of scanned
+or screenshot-wrapped PDFs while preserving the existing pure-CLI workflows.
 It never reads or modifies `summary.md`.
 
 ```text
@@ -129,19 +129,25 @@ lam --root D:\ResearchLibrary search --arxiv-id 1706.03762 --download
 
 Provider-capable `register`, `search`, explicit-provider `review`, and Inbox
 `recover` support `--offline`, `--refresh`, and `--no-cache-write`. PubMed,
-arXiv and Unpaywall clients are synchronous and rate-limited. Exact identifiers
-take priority over title searches; ambiguous or conflicting identities are not
-silently accepted.
+Crossref, arXiv and Unpaywall clients are synchronous, cached and rate-limited.
+PMID uses PubMed; DOI uses Crossref before Unpaywall enrichment; title-only
+queries use Crossref bibliographic search before applicable fallback providers.
+Ambiguous or conflicting identities are not silently accepted.
 
 PDF transfer is opt-in through `search --download`, restricted to explicit
 arXiv and Unpaywall PDF locations. Downloads are streamed to managed temporary
 storage, size-limited, validated and committed to `Inbox/` without overwrite.
 
-Workflow 3 progressively uses filename evidence, bounded pypdf text, Workflow
-2, local completeness reassessment and, when necessary, first-page OCR. It can
-retain bounded Chinese or English local metadata in a provisional Catalogue
-row, but creates no Documents row and does not move the file until identity is
-confirmed. Supplementary registration never calls Workflow 2.
+Workflow 3 progressively uses filename/PDF metadata, bounded pypdf text and a
+title or identifier lookup before OCR. If identity remains unconfirmed, it
+classifies the PDF as native text, scanned, screenshot-wrapped, or unknown
+image content. Repeated viewer chrome is excluded from content OCR while its
+footer URL remains available as identity evidence. Screenshot-like files use
+bounded first-page metadata regions rather than full-page or full-document OCR.
+OCR recovers only title, first-author, DOI, year, journal and supplementary
+clues; corrected DOI candidates must be verified by a provider. Unconfirmed
+files retain local metadata in a provisional Catalogue row, create no Documents
+row and remain in `Inbox/`. Supplementary registration never calls Workflow 2.
 
 ## Zotero-compatible citation export
 
@@ -196,7 +202,11 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.5.6
+CROSSREF_ENABLED=true
+CROSSREF_EMAIL=you@example.org
+CROSSREF_MIN_INTERVAL_SECONDS=1.0
+CROSSREF_MAX_RESULTS=10
+HTTP_USER_AGENT=LAM/0.5.7
 OCR_ENABLED=true
 OCR_LANGUAGES=en
 OCR_DPI=250
@@ -207,7 +217,8 @@ OCR_MODEL_STORAGE_DIR=
 ```
 
 LAM never prints secret values. PubMed uses at least 0.36 seconds between
-requests without an API key and 0.11 seconds with one; arXiv uses one
+requests without an API key and 0.11 seconds with one; Crossref defaults to a
+one-second interval and sends the configured contact email; arXiv uses one
 synchronous connection and at least 3.2 seconds; Unpaywall uses a local
 0.25-second interval and persistent daily accounting.
 

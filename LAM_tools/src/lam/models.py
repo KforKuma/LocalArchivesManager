@@ -49,6 +49,13 @@ class InspectionLevel(StrEnum):
     OCR = "ocr"
 
 
+class PdfVisualType(StrEnum):
+    NATIVE_TEXT = "native_text_pdf"
+    SCANNED_ARTICLE = "scanned_article_pdf"
+    SCREENSHOT_WRAPPED = "screenshot_wrapped_pdf"
+    UNKNOWN_IMAGE = "unknown_image_pdf"
+
+
 class OperationType(StrEnum):
     MOVE = "move"
     RENAME = "rename"
@@ -215,6 +222,70 @@ class OcrTextBlock:
 
 
 @dataclass(slots=True)
+class MetadataRegionResult:
+    region: str
+    normalized_box: tuple[float, float, float, float]
+    text: str = ""
+    mean_confidence: float = 0.0
+    attempt_count: int = 0
+    selected_preprocessing: str = ""
+    doi_candidates: list[IdentifierCandidate] = field(default_factory=list)
+    url_candidates: list[str] = field(default_factory=list)
+
+    def report_summary(self) -> dict[str, Any]:
+        return {
+            "region": self.region,
+            "normalized_box": list(self.normalized_box),
+            "text_character_count": len(self.text),
+            "mean_confidence": round(self.mean_confidence, 4),
+            "attempt_count": self.attempt_count,
+            "selected_preprocessing": self.selected_preprocessing,
+            "doi_candidates": [item.value for item in self.doi_candidates],
+            "url_candidates": self.url_candidates,
+        }
+
+
+@dataclass(slots=True)
+class VisualPdfInspection:
+    pdf_visual_type: PdfVisualType = PdfVisualType.UNKNOWN_IMAGE
+    full_page_image_detected: bool = False
+    repeated_chrome_detected: bool = False
+    content_crop_applied: bool = False
+    content_crop: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    confidence: float = 0.0
+    repeated_top_similarity: float = 0.0
+    repeated_bottom_similarity: float = 0.0
+    pages_compared: int = 0
+    footer_url_detected: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+    def report_summary(self) -> dict[str, Any]:
+        return {
+            "pdf_visual_type": self.pdf_visual_type.value,
+            "full_page_image_detected": self.full_page_image_detected,
+            "repeated_chrome_detected": self.repeated_chrome_detected,
+            "content_crop_applied": self.content_crop_applied,
+            "content_crop": list(self.content_crop),
+            "confidence": round(self.confidence, 4),
+            "repeated_top_similarity": round(self.repeated_top_similarity, 4),
+            "repeated_bottom_similarity": round(self.repeated_bottom_similarity, 4),
+            "pages_compared": self.pages_compared,
+            "footer_url_detected": self.footer_url_detected,
+            "warnings": self.warnings,
+        }
+
+
+@dataclass(slots=True)
+class LocalIdentityEvidence:
+    title_candidates: list[str] = field(default_factory=list)
+    author_candidates: list[str] = field(default_factory=list)
+    year_candidates: list[str] = field(default_factory=list)
+    journal_candidates: list[str] = field(default_factory=list)
+    doi_candidates: list[IdentifierCandidate] = field(default_factory=list)
+    source_order: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class OcrInspection:
     status: str = "not_run"
     page_number: int = 1
@@ -235,6 +306,7 @@ class OcrInspection:
     duration_ms: int = 0
     cache_hit: bool = False
     trigger_reason: str = ""
+    metadata_regions: list[MetadataRegionResult] = field(default_factory=list)
 
     def report_summary(self) -> dict[str, Any]:
         confidences = [item.confidence for item in self.raw_blocks]
@@ -259,6 +331,7 @@ class OcrInspection:
             "duration_ms": self.duration_ms,
             "cache_hit": self.cache_hit,
             "trigger_reason": self.trigger_reason,
+            "metadata_regions": [item.report_summary() for item in self.metadata_regions],
         }
 
 
@@ -292,6 +365,8 @@ class PdfInspection:
     pypdf_result: dict[str, Any] = field(default_factory=dict)
     local_metadata: dict[str, Any] = field(default_factory=dict)
     ocr_result: OcrInspection | None = None
+    visual_inspection: VisualPdfInspection | None = None
+    identity_evidence: LocalIdentityEvidence = field(default_factory=LocalIdentityEvidence)
 
     def report_summary(self) -> dict[str, Any]:
         return {
@@ -321,6 +396,11 @@ class PdfInspection:
             "local_abstract_detected": bool(self.local_metadata.get("abstract")),
             "ocr_triggered": self.ocr_result is not None,
             "ocr": self.ocr_result.report_summary() if self.ocr_result else None,
+            "visual": (
+                self.visual_inspection.report_summary()
+                if self.visual_inspection is not None
+                else None
+            ),
         }
 
 

@@ -168,7 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--missing-metadata", action="store_true")
     search.add_argument("--incomplete-records", action="store_true")
     search.add_argument("--normalize-existing", action="store_true")
-    search.add_argument("--provider", choices=("auto", "pubmed", "arxiv", "unpaywall"), default="auto")
+    search.add_argument(
+        "--provider",
+        choices=("auto", "pubmed", "crossref", "arxiv", "unpaywall"),
+        default="auto",
+    )
     search.add_argument("--max-results", type=int, default=10)
     search.add_argument("--max-records", type=int, default=25)
     _add_provider_policy_options(search)
@@ -200,7 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
     selector.add_argument("--all", action="store_true", dest="all_records")
     selector.add_argument("--paper-uuid")
     selector.add_argument("--document-id")
-    review.add_argument("--provider", choices=("auto", "pubmed", "arxiv", "unpaywall"))
+    review.add_argument(
+        "--provider", choices=("auto", "pubmed", "crossref", "arxiv", "unpaywall")
+    )
     _add_provider_policy_options(review)
 
     status = subparsers.add_parser(

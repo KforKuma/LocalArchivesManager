@@ -12,6 +12,7 @@ from ..models import (
 )
 from ..providers.arxiv import ArxivProvider
 from ..providers.base import MetadataLookupService, MetadataProvider
+from ..providers.crossref import CrossrefProvider
 from ..providers.pubmed import PubMedProvider
 from ..providers.unavailable import UnavailableMetadataService
 from ..providers.unpaywall import UnpaywallProvider
@@ -29,6 +30,7 @@ class CompositeMetadataLookupService:
         cache = MetadataCacheService(settings.metadata_cache_dir, settings.cache)
         self.providers = providers or {
             "pubmed": PubMedProvider(settings, cache),
+            "crossref": CrossrefProvider(settings, cache),
             "arxiv": ArxivProvider(settings, cache),
             "unpaywall": UnpaywallProvider(settings, cache),
         }
@@ -36,7 +38,27 @@ class CompositeMetadataLookupService:
 
     def lookup(self, request: MetadataLookupRequest) -> MetadataLookupResult:
         names = self._initial_providers(request)
-        results = [self.providers[name].lookup(request) for name in names if name in self.providers]
+        results: list[ProviderResult] = []
+        if (
+            request.provider == "auto"
+            and request.title
+            and not (request.pmid or request.doi or request.arxiv_id)
+            and "crossref" in names
+            and "crossref" in self.providers
+        ):
+            results.append(self.providers["crossref"].lookup(request))
+            preliminary = self.merge_service.merge(request, results)
+            if (
+                preliminary.status.value == "found"
+                and preliminary.confidence == "exact_title_supported"
+            ):
+                return preliminary
+            names = [name for name in names if name != "crossref"]
+        results.extend(
+            self.providers[name].lookup(request)
+            for name in names
+            if name in self.providers
+        )
         if request.provider == "auto":
             discovered_doi = next(
                 (
@@ -47,8 +69,22 @@ class CompositeMetadataLookupService:
                 ),
                 "",
             )
+            incomplete_bibliography = any(
+                not (record.title and record.authors and record.year and record.journal)
+                for result in results
+                for record in result.records
+                if record.doi == discovered_doi
+            )
+            if (
+                discovered_doi
+                and incomplete_bibliography
+                and "crossref" not in names
+                and "crossref" in self.providers
+            ):
+                enriched = replace(request, pmid=None, doi=discovered_doi)
+                results.append(self.providers["crossref"].lookup(enriched))
             if discovered_doi and "unpaywall" not in names and "unpaywall" in self.providers:
-                enriched = replace(request, doi=discovered_doi)
+                enriched = replace(request, pmid=None, doi=discovered_doi)
                 results.append(self.providers["unpaywall"].lookup(enriched))
         return self.merge_service.merge(request, results)
 
@@ -93,9 +129,9 @@ class CompositeMetadataLookupService:
         if request.arxiv_id:
             return ["arxiv"]
         if request.doi:
-            return ["pubmed", "unpaywall"]
+            return ["crossref", "unpaywall"]
         if request.title:
-            return ["pubmed", "arxiv"]
+            return ["crossref", "pubmed", "arxiv"]
         return []
 
 __all__ = [

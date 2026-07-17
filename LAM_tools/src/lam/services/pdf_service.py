@@ -11,7 +11,13 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from ..config import Settings
-from ..models import IdentifierCandidate, OcrInspection, PdfInspection, TitleCandidate
+from ..models import (
+    IdentifierCandidate,
+    LocalIdentityEvidence,
+    OcrInspection,
+    PdfInspection,
+    TitleCandidate,
+)
 from ..utils.identifiers import extract_doi_candidates, extract_pmid_candidates
 from ..utils.local_pdf_metadata import extract_local_pdf_metadata
 from ..utils.text import (
@@ -23,9 +29,10 @@ from ..utils.text import (
 
 
 class PdfService:
-    def __init__(self, settings: Settings, ocr_service=None):
+    def __init__(self, settings: Settings, ocr_service=None, visual_service=None):
         self.settings = settings
         self.ocr_service = ocr_service
+        self.visual_service = visual_service
         self._cache: dict[tuple[object, ...], PdfInspection] = {}
 
     def inspect(
@@ -40,6 +47,7 @@ class PdfService:
         ocr_trigger_reason: str | None = None,
         run_id: str | None = None,
         ocr_cache_write: bool = True,
+        visual_analysis: bool = False,
     ) -> PdfInspection:
         if ocr_mode not in {"auto", "never", "always"}:
             raise ValueError("ocr_mode must be auto, never, or always")
@@ -57,6 +65,7 @@ class PdfService:
             ocr_gpu,
             ocr_trigger_reason,
             ocr_cache_write,
+            visual_analysis,
         )
         if self.settings.inspection_cache_enabled and key in self._cache:
             cached = copy.deepcopy(self._cache[key])
@@ -129,9 +138,11 @@ class PdfService:
 
             if extract_text:
                 extracted: list[str] = []
+                page_image_signals: list[dict[str, object]] = []
                 total_chars = 0
                 pages_to_read = min(result.page_count, self.settings.pdf_max_pages)
                 for index in range(pages_to_read):
+                    page_image_signals.append(self._page_image_signal(reader.pages[index]))
                     try:
                         page_text = reader.pages[index].extract_text() or ""
                     except Exception as exc:
@@ -181,10 +192,28 @@ class PdfService:
                 "title_candidates": [item.value for item in pypdf_titles[:5]],
                 "doi_candidates": [item.value for item in pypdf_dois],
                 "pmid_candidates": [item.value for item in pypdf_pmids],
+                "page_image_signals": page_image_signals if extract_text else [],
             }
             result.text_extraction_method = (
                 "pypdf" if result.pypdf_text_available else "metadata_only"
             )
+
+            if visual_analysis:
+                service = self.visual_service
+                if service is None:
+                    from .pdf_visual_service import PdfVisualService
+
+                    service = PdfVisualService(self.settings)
+                    self.visual_service = service
+                result.visual_inspection = service.inspect(
+                    resolved,
+                    native_text_chars=len(result.sampled_text.strip()),
+                    page_count=result.page_count,
+                    page_image_signals=(
+                        list(result.pypdf_result.get("page_image_signals") or [])
+                    ),
+                    run_id=run_id or f"visual-{stat.st_mtime_ns}",
+                )
 
             trigger_reason = self._ocr_trigger_reason(
                 result, ocr_mode, extract_text, ocr_trigger_reason
@@ -208,6 +237,7 @@ class PdfService:
                     trigger_reason=trigger_reason,
                     config=config,
                     cache_write=ocr_cache_write,
+                    visual_inspection=result.visual_inspection,
                 )
                 result.ocr_result = ocr
                 self._merge_ocr(result, ocr, pypdf_dois, pypdf_pmids, pypdf_titles)
@@ -227,11 +257,28 @@ class PdfService:
                         "standard_filename",
                     )
                 )
+            result.doi_candidates.extend(
+                extract_doi_candidates(resolved.stem, source_type="filename")
+            )
+            result.pmid_candidates.extend(
+                extract_pmid_candidates(resolved.stem, source_type="filename")
+            )
             result.doi_candidates = self._unique_identifiers(result.doi_candidates)
             result.pmid_candidates = self._unique_identifiers(result.pmid_candidates)
             result.title_candidates = self._unique_titles(result.title_candidates)
+            ocr_text = (
+                result.ocr_result.combined_text
+                if result.ocr_result is not None
+                and result.ocr_result.status == "success"
+                else ""
+            )
             result.year_candidates = sorted(
-                set(re.findall(r"\b(?:19|20)\d{2}\b", metadata_text + "\n" + result.sampled_text))
+                set(
+                    re.findall(
+                        r"\b(?:19|20)\d{2}\b",
+                        metadata_text + "\n" + result.sampled_text + "\n" + ocr_text,
+                    )
+                )
             )
             local_metadata = extract_local_pdf_metadata(
                 first_page_text=result.first_page_text,
@@ -247,14 +294,33 @@ class PdfService:
                     if item.source_type != "ocr_corrected"
                 ],
                 pmid_candidates=[item.value for item in result.pmid_candidates],
-                ocr_text=(
-                    result.ocr_result.combined_text
-                    if result.ocr_result is not None
-                    and result.ocr_result.status == "success"
-                    else ""
-                ),
+                ocr_text=ocr_text,
             )
             result.local_metadata = asdict(local_metadata)
+            result.identity_evidence = LocalIdentityEvidence(
+                title_candidates=[item.value for item in result.title_candidates],
+                author_candidates=list(local_metadata.authors),
+                year_candidates=list(result.year_candidates),
+                journal_candidates=list(
+                    dict.fromkeys(
+                        [
+                            *result.journal_candidates,
+                            *(
+                                [local_metadata.journal]
+                                if local_metadata.journal
+                                else []
+                            ),
+                        ]
+                    )
+                ),
+                doi_candidates=list(result.doi_candidates),
+                source_order=list(
+                    dict.fromkeys(
+                        item.source_type
+                        for item in [*result.title_candidates, *result.doi_candidates]
+                    )
+                ),
+            )
             result.is_probable_supplement = is_probable_supplement(
                 result.filename,
                 result.metadata_title,
@@ -363,6 +429,45 @@ class PdfService:
         return inspection
 
     @staticmethod
+    def _page_image_signal(page: object) -> dict[str, object]:
+        signal: dict[str, object] = {
+            "image_count": 0,
+            "max_image_pixels": 0,
+            "large_page_image": False,
+        }
+        try:
+            resources = page.get("/Resources") or {}
+            xobjects = resources.get("/XObject") or {}
+            if hasattr(xobjects, "get_object"):
+                xobjects = xobjects.get_object()
+            widths: list[int] = []
+            heights: list[int] = []
+            for reference in xobjects.values():
+                item = reference.get_object() if hasattr(reference, "get_object") else reference
+                if str(item.get("/Subtype") or "") != "/Image":
+                    continue
+                widths.append(int(item.get("/Width") or 0))
+                heights.append(int(item.get("/Height") or 0))
+            pixels = [width * height for width, height in zip(widths, heights)]
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+            signal.update(
+                {
+                    "image_count": len(pixels),
+                    "max_image_pixels": max(pixels, default=0),
+                    "large_page_image": any(
+                        pixels[index] >= 250_000
+                        and widths[index] >= page_width
+                        and heights[index] >= page_height
+                        for index in range(len(pixels))
+                    ),
+                }
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+        return signal
+
+    @staticmethod
     def _title_from_filename(filename: str) -> str:
         stem = Path(filename).stem
         match = re.match(r"^.+?,\s*(?:19|20)\d{2}(?:,\s*[^-]+)?\s+-\s+(.+)$", stem)
@@ -376,14 +481,34 @@ class PdfService:
     def _unique_identifiers(
         candidates: list[IdentifierCandidate],
     ) -> list[IdentifierCandidate]:
+        source_priority = {
+            "metadata": 0,
+            "filename": 1,
+            "first_page": 2,
+            "sampled_page": 2,
+            "doi_region_ocr": 3,
+            "footer_url_ocr": 4,
+            "region_ocr": 5,
+            "ocr": 6,
+            "ocr_corrected": 7,
+        }
         unique: dict[str, IdentifierCandidate] = {}
         for candidate in candidates:
             existing = unique.get(candidate.value)
             if existing is None or (
-                existing.confidence != "high" and candidate.confidence == "high"
+                source_priority.get(candidate.source_type, 50)
+                < source_priority.get(existing.source_type, 50)
+            ) or (
+                source_priority.get(candidate.source_type, 50)
+                == source_priority.get(existing.source_type, 50)
+                and existing.confidence != "high"
+                and candidate.confidence == "high"
             ):
                 unique[candidate.value] = candidate
-        return list(unique.values())
+        return sorted(
+            unique.values(),
+            key=lambda item: source_priority.get(item.source_type, 50),
+        )
 
     @staticmethod
     def _unique_titles(candidates: list[TitleCandidate]) -> list[TitleCandidate]:

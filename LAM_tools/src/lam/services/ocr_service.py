@@ -20,10 +20,13 @@ from typing import Any, Callable
 from ..config import OcrConfig, Settings
 from ..models import (
     IdentifierCandidate,
+    MetadataRegionResult,
     OcrAvailability,
     OcrInspection,
     OcrTextBlock,
+    PdfVisualType,
     TitleCandidate,
+    VisualPdfInspection,
 )
 from ..utils.identifiers import extract_doi_candidates, extract_pmid_candidates
 from ..utils.text import normalize_title, title_candidates_from_page
@@ -143,6 +146,7 @@ class OcrService:
         trigger_reason: str,
         config: OcrConfig | None = None,
         cache_write: bool = True,
+        visual_inspection: VisualPdfInspection | None = None,
     ) -> OcrInspection:
         started = time.monotonic()
         cfg = config or self.config
@@ -152,7 +156,7 @@ class OcrService:
             languages=list(cfg.languages),
             trigger_reason=trigger_reason,
         )
-        cache_path = self._cache_path(path, cfg)
+        cache_path = self._cache_path(path, cfg, visual_inspection)
         if cfg.cache_enabled and cache_path.is_file():
             cached = self._load_cache(cache_path)
             if cached is not None:
@@ -198,44 +202,73 @@ class OcrService:
             result.gpu_mode = mode
             if mode == "gpu_fallback_to_cpu":
                 result.warnings.append("ocr_gpu_fallback")
-            try:
-                input_image = (
-                    self._preprocess(image)
-                    if cfg.preprocessing_mode == "grayscale_autocontrast"
-                    else image
+            regional = bool(
+                visual_inspection is not None
+                and visual_inspection.pdf_visual_type
+                in {
+                    PdfVisualType.SCANNED_ARTICLE,
+                    PdfVisualType.SCREENSHOT_WRAPPED,
+                    PdfVisualType.UNKNOWN_IMAGE,
+                }
+            )
+            if regional:
+                blocks, accepted = self._inspect_metadata_regions(
+                    image,
+                    reader,
+                    cfg,
+                    result,
+                    visual_inspection,
                 )
-                raw = self._read_image(reader, input_image)
-            except Exception as exc:
-                if mode == "gpu" and cfg.gpu == "auto":
-                    self._gpu_failed_keys.add(self._reader_base_key(cfg))
-                    reader, _ = self._get_reader(cfg, force_cpu=True)
-                    result.gpu_mode = "gpu_fallback_to_cpu"
-                    result.warnings.append("ocr_gpu_fallback")
-                    raw = self._read_image(reader, image)
-                else:
-                    raise exc
-            blocks = self._blocks(raw)
-            if time.monotonic() - started > cfg.timeout_seconds:
-                raise TimeoutError
-            accepted = [item for item in blocks if item.confidence >= cfg.min_confidence]
-            if (
-                sum(len(item.text) for item in accepted) < cfg.min_text_chars
-                and cfg.preprocessing_mode == "raw"
-            ):
-                preprocessed = self._preprocess(image)
-                second = self._blocks(self._read_image(reader, preprocessed))
-                if sum(len(item.text) for item in second) > sum(
-                    len(item.text) for item in blocks
+                result.raw_blocks = blocks
+                result.ordered_lines = self._ordered_lines(accepted)
+                result.combined_text = "\n".join(
+                    item.text for item in result.metadata_regions if item.text
+                )[:30_000]
+                self._extract_region_candidates(result, cfg)
+                result.warnings.append("ocr_metadata_regions_only")
+            else:
+                try:
+                    input_image = (
+                        self._preprocess(image)
+                        if cfg.preprocessing_mode == "grayscale_autocontrast"
+                        else image
+                    )
+                    raw = self._read_image(reader, input_image)
+                except Exception as exc:
+                    if mode == "gpu" and cfg.gpu == "auto":
+                        self._gpu_failed_keys.add(self._reader_base_key(cfg))
+                        reader, _ = self._get_reader(cfg, force_cpu=True)
+                        result.gpu_mode = "gpu_fallback_to_cpu"
+                        result.warnings.append("ocr_gpu_fallback")
+                        raw = self._read_image(reader, image)
+                    else:
+                        raise exc
+                blocks = self._blocks(raw)
+                if time.monotonic() - started > cfg.timeout_seconds:
+                    raise TimeoutError
+                accepted = [
+                    item for item in blocks if item.confidence >= cfg.min_confidence
+                ]
+                if (
+                    sum(len(item.text) for item in accepted) < cfg.min_text_chars
+                    and cfg.preprocessing_mode == "raw"
                 ):
-                    blocks = second
-                    accepted = [
-                        item for item in blocks if item.confidence >= cfg.min_confidence
-                    ]
-                    result.warnings.append("ocr_preprocessed_retry")
-            result.raw_blocks = blocks
-            result.ordered_lines = self._ordered_lines(accepted)
-            result.combined_text = "\n".join(result.ordered_lines)[:30_000]
-            self._extract_candidates(result, cfg)
+                    preprocessed = self._preprocess(image)
+                    second = self._blocks(self._read_image(reader, preprocessed))
+                    if sum(len(item.text) for item in second) > sum(
+                        len(item.text) for item in blocks
+                    ):
+                        blocks = second
+                        accepted = [
+                            item
+                            for item in blocks
+                            if item.confidence >= cfg.min_confidence
+                        ]
+                        result.warnings.append("ocr_preprocessed_retry")
+                result.raw_blocks = blocks
+                result.ordered_lines = self._ordered_lines(accepted)
+                result.combined_text = "\n".join(result.ordered_lines)[:30_000]
+                self._extract_candidates(result, cfg)
             if not blocks:
                 result.status = "ocr_no_text_detected"
                 result.errors.append("ocr_no_text_detected")
@@ -452,7 +485,167 @@ class OcrService:
             candidate.evidence = "easyocr_first_page_top_region"
         result.title_candidates = candidates
 
-    def _cache_path(self, path: Path, cfg: OcrConfig) -> Path:
+    def _inspect_metadata_regions(
+        self,
+        image: Any,
+        reader: Any,
+        cfg: OcrConfig,
+        result: OcrInspection,
+        visual: VisualPdfInspection,
+    ) -> tuple[list[OcrTextBlock], list[OcrTextBlock]]:
+        from .pdf_visual_service import metadata_region_boxes
+
+        all_blocks: list[OcrTextBlock] = []
+        all_accepted: list[OcrTextBlock] = []
+        for region_name, box in metadata_region_boxes(visual):
+            left = max(0, min(image.width - 1, round(box[0] * image.width)))
+            top = max(0, min(image.height - 1, round(box[1] * image.height)))
+            right = max(left + 1, min(image.width, round(box[2] * image.width)))
+            bottom = max(top + 1, min(image.height, round(box[3] * image.height)))
+            crop = image.crop((left, top, right, bottom))
+            attempts = self._region_variants(crop)
+            best_blocks: list[OcrTextBlock] = []
+            best_accepted: list[OcrTextBlock] = []
+            best_name = "raw_crop"
+            best_score = -1.0
+            attempt_count = 0
+            for attempt_name, candidate_image in attempts:
+                attempt_count += 1
+                blocks = self._blocks(self._read_image(reader, candidate_image))
+                accepted = [
+                    item for item in blocks if item.confidence >= cfg.min_confidence
+                ]
+                score = sum(len(item.text) * max(item.confidence, 0.1) for item in accepted)
+                if score > best_score:
+                    best_score = score
+                    best_blocks = blocks
+                    best_accepted = accepted
+                    best_name = attempt_name
+                if sum(len(item.text) for item in accepted) >= max(
+                    20, cfg.min_text_chars // 2
+                ):
+                    break
+            lines = self._ordered_lines(best_accepted)
+            text = "\n".join(lines)[:5000]
+            exact = extract_doi_candidates(
+                text,
+                source_type=(
+                    "footer_url_ocr"
+                    if region_name == "viewer_footer_url"
+                    else "doi_region_ocr"
+                    if region_name == "article_doi_region"
+                    else "region_ocr"
+                ),
+            )
+            urls = list(
+                dict.fromkeys(
+                    re.sub(r"[),.;]+$", "", value)
+                    for value in re.findall(r"https?://[^\s<>]+", text, re.I)
+                )
+            )
+            result.metadata_regions.append(
+                MetadataRegionResult(
+                    region=region_name,
+                    normalized_box=box,
+                    text=text,
+                    mean_confidence=(
+                        sum(item.confidence for item in best_accepted)
+                        / len(best_accepted)
+                        if best_accepted
+                        else 0.0
+                    ),
+                    attempt_count=attempt_count,
+                    selected_preprocessing=best_name,
+                    doi_candidates=exact,
+                    url_candidates=urls,
+                )
+            )
+            all_blocks.extend(best_blocks)
+            all_accepted.extend(best_accepted)
+        visual.footer_url_detected = any(
+            item.url_candidates
+            for item in result.metadata_regions
+            if item.region == "viewer_footer_url"
+        )
+        return all_blocks, all_accepted
+
+    @staticmethod
+    def _region_variants(image: Any) -> list[tuple[str, Any]]:
+        from PIL import ImageEnhance, ImageOps
+
+        enlarged = image.resize((image.width * 2, image.height * 2))
+        contrasted = ImageOps.autocontrast(ImageOps.grayscale(enlarged))
+        sharpened = ImageEnhance.Sharpness(contrasted).enhance(1.35)
+        thresholded = sharpened.point(lambda value: 255 if value >= 178 else 0)
+        return [
+            ("raw_crop", image),
+            ("2x_grayscale_autocontrast", contrasted),
+            ("2x_light_sharpen_threshold", thresholded),
+        ]
+
+    @staticmethod
+    def _extract_region_candidates(result: OcrInspection, cfg: OcrConfig) -> None:
+        candidates: list[IdentifierCandidate] = []
+        for region in result.metadata_regions:
+            candidates.extend(region.doi_candidates)
+            corrected_text = OcrService._correct_ocr_doi_text(region.text)
+            if corrected_text != region.text:
+                corrected = extract_doi_candidates(
+                    corrected_text, source_type="ocr_corrected"
+                )
+                for item in corrected:
+                    item.confidence = "medium"
+                    item.line_or_context = f"region={region.region}; corrected"
+                candidates.extend(corrected)
+        unique: dict[str, IdentifierCandidate] = {}
+        for item in candidates:
+            existing = unique.get(item.value)
+            if existing is None or (
+                existing.source_type == "ocr_corrected"
+                and item.source_type != "ocr_corrected"
+            ):
+                unique[item.value] = item
+        result.doi_candidates = list(unique.values())
+        if any(item.source_type == "ocr_corrected" for item in result.doi_candidates):
+            result.warnings.append("ocr_identifier_corrected")
+        result.pmid_candidates = extract_pmid_candidates(
+            result.combined_text, source_type="region_ocr"
+        )
+        result.year_candidates = sorted(
+            set(re.findall(r"\b(?:19|20)\d{2}\b", result.combined_text))
+        )
+        title_region = next(
+            (item for item in result.metadata_regions if item.region == "title_author"),
+            None,
+        )
+        candidates = title_candidates_from_page(
+            title_region.text if title_region else "", page=1
+        )
+        for candidate in candidates:
+            candidate.source_type = "ocr_title_author_region"
+            candidate.confidence = "high" if len(candidate.value) >= 20 else "medium"
+            candidate.evidence = "easyocr_title_author_region"
+        result.title_candidates = candidates
+
+    @staticmethod
+    def _correct_ocr_doi_text(text: str) -> str:
+        corrected = text.replace("，", ",").replace("。", ".")
+        corrected = re.sub(r"\b[Il1][Oo0][,.]\s*(\d{4,9})\s*/\s*", r"10.\1/", corrected)
+        corrected = re.sub(r"\b10\s*[,.]\s*(\d{4,9})\s*/\s*", r"10.\1/", corrected)
+        corrected = re.sub(
+            r"(10\.\d{4,9}/\S+?)\s+(?:p(?:age)?\.?\s*)?\d{1,4}\b",
+            r"\1",
+            corrected,
+            flags=re.I,
+        )
+        return corrected
+
+    def _cache_path(
+        self,
+        path: Path,
+        cfg: OcrConfig,
+        visual: VisualPdfInspection | None = None,
+    ) -> Path:
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -472,6 +665,13 @@ class OcrService:
                 cfg.preprocessing_mode,
                 str(cfg.min_confidence),
                 cfg.configuration_version,
+                "regional-v1" if visual is not None else "full-page-v1",
+                visual.pdf_visual_type.value if visual is not None else "none",
+                (
+                    ",".join(f"{value:.4f}" for value in visual.content_crop)
+                    if visual is not None
+                    else "none"
+                ),
             )
         )
         name = hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json"
@@ -490,6 +690,19 @@ class OcrService:
             ]
             payload["pmid_candidates"] = [
                 IdentifierCandidate(**item) for item in payload["pmid_candidates"]
+            ]
+            payload["metadata_regions"] = [
+                MetadataRegionResult(
+                    **{
+                        **item,
+                        "normalized_box": tuple(item["normalized_box"]),
+                        "doi_candidates": [
+                            IdentifierCandidate(**candidate)
+                            for candidate in item.get("doi_candidates", [])
+                        ],
+                    }
+                )
+                for item in payload.get("metadata_regions", [])
             ]
             return OcrInspection(**payload)
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):

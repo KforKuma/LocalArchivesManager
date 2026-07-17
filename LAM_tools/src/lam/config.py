@@ -46,7 +46,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.5.6"
+    user_agent: str = "LAM/0.5.7"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +58,17 @@ class PubMedConfig:
     api_key: str = field(default="", repr=False)
     min_interval_seconds: float = 0.36
     batch_size: int = 100
+    exact_ttl_seconds: int = 30 * 24 * 3600
+    search_ttl_seconds: int = 7 * 24 * 3600
+
+
+@dataclass(frozen=True, slots=True)
+class CrossrefConfig:
+    enabled: bool = True
+    base_url: str = "https://api.crossref.org"
+    email: str = ""
+    min_interval_seconds: float = 1.0
+    max_results: int = 10
     exact_ttl_seconds: int = 30 * 24 * 3600
     search_ttl_seconds: int = 7 * 24 * 3600
 
@@ -151,6 +162,7 @@ class Settings:
     metadata_cache_dir: Path | None = None
     network: NetworkConfig = field(default_factory=NetworkConfig)
     pubmed: PubMedConfig = field(default_factory=PubMedConfig)
+    crossref: CrossrefConfig = field(default_factory=CrossrefConfig)
     arxiv: ArxivConfig = field(default_factory=ArxivConfig)
     unpaywall: UnpaywallConfig = field(default_factory=UnpaywallConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
@@ -187,7 +199,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.6").strip() or "LAM/0.5.6",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.7").strip() or "LAM/0.5.7",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
@@ -201,6 +213,14 @@ class Settings:
                 _env_float("PUBMED_MIN_INTERVAL_SECONDS", pubmed_interval),
             ),
             batch_size=max(1, _env_int("PUBMED_BATCH_SIZE", 100)),
+        )
+        crossref = CrossrefConfig(
+            enabled=_env_bool("CROSSREF_ENABLED", True),
+            email=os.getenv("CROSSREF_EMAIL", "").strip(),
+            min_interval_seconds=max(
+                0.1, _env_float("CROSSREF_MIN_INTERVAL_SECONDS", 1.0)
+            ),
+            max_results=max(1, min(100, _env_int("CROSSREF_MAX_RESULTS", 10))),
         )
         arxiv = ArxivConfig(
             enabled=_env_bool("ARXIV_ENABLED", True),
@@ -277,9 +297,12 @@ class Settings:
                 library_root / ".library_state" / "cache" / "citation_export"
             ),
             export_lock_path=library_root / ".library_state" / "citation_export.lock",
-            metadata_cache_dir=library_root / ".library_state" / "metadata_cache",
+            metadata_cache_dir=(
+                library_root / ".library_state" / "cache" / "metadata"
+            ),
             network=network,
             pubmed=pubmed,
+            crossref=crossref,
             arxiv=arxiv,
             unpaywall=unpaywall,
             download=download,

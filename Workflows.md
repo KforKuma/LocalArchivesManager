@@ -380,7 +380,7 @@ When nothing changed, report only a concise no-change result and counts.
 
 ---
 
-# Workflow 2: PubMed/arXiv metadata query and optional download
+# Workflow 2: Provider metadata query and optional download
 
 ## Trigger
 
@@ -393,7 +393,7 @@ Run this workflow:
 
 ## Purpose
 
-1. Search PubMed or arXiv for paper metadata.
+1. Search PubMed, Crossref, arXiv, or Unpaywall for paper metadata.
 2. Add new catalogue records.
 3. Complete missing metadata in existing records.
 4. Optionally download a paper into `Inbox/`.
@@ -404,15 +404,22 @@ Metadata query is the default mode. Download is optional.
 
 ## Identification order
 
-Search or match using:
+Choose the provider route from the strongest available evidence:
 
-1. PMID
-2. DOI
-3. exact title
-4. title plus authors, year, or journal
-5. fuzzy title only when supported by additional metadata
+1. PMID → exact PubMed query.
+2. DOI → exact Crossref query, followed by Unpaywall OA enrichment.
+3. arXiv ID → exact arXiv query.
+4. high-quality title → Crossref bibliographic query, followed by applicable
+   fallback providers when Crossref does not confirm the identity.
+5. fuzzy title only when author, year, or journal supplies independent support.
 
-Do not accept a low-confidence fuzzy-title match as final.
+Crossref does not replace PubMed for biomedical PMID records. A Crossref DOI
+response must return the requested DOI. A title result is accepted only when
+the title is highly consistent and at least one of author, year, or journal
+supports it; the first returned result is never accepted merely by rank.
+Ambiguous, identifier-mismatched, or materially conflicting Crossref results
+remain provisional as `crossref_query_ambiguous`,
+`crossref_identifier_mismatch`, or `crossref_metadata_conflict`.
 
 ---
 
@@ -455,7 +462,7 @@ placement is corrected without a note or blocker. `source` stores only the
 current primary canonical source in this priority order:
 
 ```text
-pubmed > arxiv > unpaywall > local_pdf
+pubmed > crossref > arxiv > unpaywall > local_pdf
 ```
 
 Use `--incomplete-records` to complete identifier-backed rows with missing
@@ -509,6 +516,13 @@ Those actions belong to Workflow 3.
 
 Obey the provider's published limits.
 
+Crossref uses the existing synchronous HTTP client, retry policy, metadata
+cache, and offline/refresh/no-cache-write controls. Requests send a configured
+`CROSSREF_EMAIL` contact when available and otherwise retain a descriptive
+User-Agent. The default minimum interval is one second. `not_found` from a
+Crossref title query is a normal degradation result and is not itself a
+workflow failure.
+
 For arXiv:
 
 1. use one connection at a time;
@@ -557,25 +571,34 @@ Run only when explicitly requested by the user.
 A request to run Workflow 3 authorizes routine high-confidence renaming and movement from `Inbox/` to `Registered/`.
 
 The implementation processes only direct, non-hidden `.pdf` children of
-`Inbox/`. It gathers filename and bounded `pypdf` evidence before Workflow 2,
-then re-evaluates local completeness after an unsuccessful provider result and
-may OCR page 1. Provider, catalogue, PDF, OCR, and user
+`Inbox/`. It gathers filename, PDF metadata, and bounded `pypdf` evidence, then
+performs an identifier or high-quality title lookup before expensive OCR. It
+re-evaluates local completeness after an unsuccessful provider result and may
+visually inspect and OCR bounded page-1 regions. Provider, catalogue, PDF, OCR, and user
 confirmation evidence are merged before the durable identity decision;
 identifier conflicts remain hard blockers. Every processed unresolved PDF
 receives a stable provisional catalogue row and remains in `Inbox/`.
 
-### First-page OCR fallback
+### PDF visual classification and first-page OCR fallback
 
-Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. In
-`--ocr auto` mode it initially renders page 1 only when that evidence is empty,
-too short, abnormal, or lacks identification candidates. After Workflow 2
-returns `not_found`, `ambiguous`, an incomplete record, or provider failure, it
-reconsiders OCR when authors, journal, abstract, or a usable English title are
-still absent. An existing DOI or title does not suppress this second gate. The
-report reason is `provider_not_found_local_metadata_incomplete`. `--ocr never`
-disables OCR, while `--ocr always` performs one first-page pass for comparison.
-`--skip-pdf-text` and `--filename-only` disable all page-content extraction,
-including OCR.
+Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. A usable
+title or identifier is submitted to Workflow 2 before deeper OCR. A confirmed
+provider result skips unnecessary OCR. After Workflow 2 returns `not_found`,
+`ambiguous`, an incomplete record, or provider failure, the workflow classifies
+the file as `native_text_pdf`, `scanned_article_pdf`,
+`screenshot_wrapped_pdf`, or `unknown_image_pdf` and reconsiders OCR when key
+identity clues remain absent. An existing unverified DOI or title does not
+suppress this second gate. The report reason is
+`provider_not_found_local_metadata_incomplete`. `--ocr never` disables OCR,
+while `--ocr always` performs one page-1 comparison. `--skip-pdf-text` and
+`--filename-only` disable all page-content extraction, including OCR.
+
+Screenshot-wrapped PDFs are recognized from little native text, near-page
+images, and repeated top/bottom content across the first two or three pages.
+The repeated viewer shell is excluded by a non-destructive content crop; the
+footer URL region is retained separately. The original PDF is never modified
+and no cleaned replacement is produced. Classification controls extraction
+strategy only and never establishes paper identity.
 
 OCR uses `pdf2image` and Poppler for rendering and EasyOCR for recognition.
 Poppler, EasyOCR, or model unavailability is an OCR-specific state and must not
@@ -584,10 +607,18 @@ registration. Images are bounded, written only below
 `.library_state/tmp/<run_id>/ocr/`, and removed after use unless debug retention
 is explicitly enabled.
 
+For scanned, screenshot-wrapped, and unknown-image files, OCR is restricted to
+bounded metadata regions: journal header, title/author, article information,
+DOI, abstract header, and viewer footer URL. Each region receives at most three
+deterministic attempts: raw crop, 2× grayscale/autocontrast, and 2× light
+sharpening or thresholding. OCR does not recover full text, transcribe the full
+abstract, parse references, tables, or every page.
+
 OCR results preserve text boxes and confidence, are spatially ordered, and may
-add title, DOI, PMID, and year candidates. They do not lower the registration
-threshold: a fuzzy OCR title, a corrected DOI without independent support, or
-conflicting embedded-text/OCR evidence cannot authorize a move. OCR-derived
+add title, first-author, DOI, year, journal, URL, and Supplementary candidates.
+They do not lower the registration threshold: a fuzzy OCR title, a corrected
+DOI without independent provider verification, or conflicting embedded-text/OCR
+evidence cannot authorize a move. OCR-derived
 identifiers with unique confirmation may proceed through the existing local
 match or Workflow 2 verification. Successful files still move only from
 `Inbox/` to `Registered/`; Workflow 4 is unchanged.
@@ -598,9 +629,10 @@ non-blocking parser warnings: successful text extraction keeps the PDF
 readable and Workflow 3 continues normally.
 
 OCR cache keys include the file fingerprint, page, engine/version, languages,
-DPI, preprocessing, and configuration version. Dry runs may read this cache but
-do not write it. Reports include only status, candidate summaries, confidence,
-warnings, and selected evidence—not the full recognized page text.
+DPI, preprocessing, visual classification, crop, region strategy, and
+configuration version. Dry runs may read this cache but do not write it.
+Reports include visual type, chrome/crop decisions, metadata-region summaries,
+DOI sources and correction/verification state—not full recognized page text.
 
 ---
 
@@ -627,9 +659,12 @@ For each candidate file:
 3. Inspect PDF metadata and bounded first-page text with `pypdf`.
 4. Filter title candidates by section, position, and title quality.
 5. Query Workflow 2 with identifiers, English/local titles, authors, year, and journal.
-6. After an unsuccessful or incomplete provider result, re-evaluate local fields.
-7. OCR page 1 when the second gate finds important local fields missing.
-8. Merge all pypdf/OCR local evidence before creating a new provisional row.
+6. After an unsuccessful or incomplete provider result, re-evaluate local fields
+   and classify the PDF visual type.
+7. Detect repeated viewer chrome and OCR only high-value page-1 metadata regions
+   when the second gate finds identity clues missing.
+8. Merge filename, PDF metadata, pypdf, regional OCR, and provider evidence
+   before creating a new provisional row.
 9. Fill only reliable blank local fields and preserve provenance/confidence.
 10. Confirm that the combined PDF-paper evidence meets the high-confidence threshold.
 11. Preserve `paper_uuid` and canonicalize provider metadata, PubMed journal

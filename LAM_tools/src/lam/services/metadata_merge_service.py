@@ -20,12 +20,13 @@ from ..models import (
     ProviderStatus,
 )
 from ..utils.identifiers import normalize_arxiv_id, normalize_doi, normalize_pmid
+from ..utils.journal import journals_equivalent
 from ..utils.text import normalize_title
 from ..utils.title_matching import tolerant_title_score
 from ..utils.publication_type import canonicalize_publication_type
 
 
-PROVIDER_PRIORITY = {"pubmed": 0, "arxiv": 1, "unpaywall": 2}
+PROVIDER_PRIORITY = {"pubmed": 0, "crossref": 1, "arxiv": 2, "unpaywall": 3}
 
 
 class MetadataMergeService:
@@ -54,10 +55,13 @@ class MetadataMergeService:
 
         candidates, hard_conflict = self._filter_by_request_identifiers(request, records)
         if hard_conflict:
+            crossref = any(result.provider == "crossref" for result in results)
             conflict = MetadataConflict(
                 "paper_identity",
                 {record.canonical_id: self._identity(record) for record in records},
-                "metadata_identifier_conflict",
+                "crossref_identifier_mismatch"
+                if crossref
+                else "metadata_identifier_conflict",
             )
             return self._blocked(
                 MetadataLookupStatus.CONFLICT,
@@ -80,13 +84,32 @@ class MetadataMergeService:
                     MetadataConflict(
                         "paper_identity",
                         {record.canonical_id: self._identity(record) for record in candidates},
-                        "metadata_query_ambiguous",
+                        (
+                            "crossref_query_ambiguous"
+                            if any(result.provider == "crossref" for result in results)
+                            else "metadata_query_ambiguous"
+                        ),
                     )
                 ],
             )
 
         group = groups[0]
         conflicts = self._identity_conflicts(group)
+        if (
+            any(result.provider == "crossref" for result in results)
+            and any(
+                item.blocking and item.field_name not in {"doi", "pmid"}
+                for item in conflicts
+            )
+        ):
+            conflicts.append(
+                MetadataConflict(
+                    "paper_identity",
+                    {record.canonical_id: self._identity(record) for record in group},
+                    "crossref_metadata_conflict",
+                    True,
+                )
+            )
         if any(item.blocking for item in conflicts):
             return self._blocked(
                 MetadataLookupStatus.CONFLICT,
@@ -201,20 +224,34 @@ class MetadataMergeService:
             score = max(tolerant_title_score(query, item.title) for item in group)
             if score < 0.92:
                 continue
-            if request.year and not any(
-                not item.year or abs(int(item.year) - int(request.year)) <= 1
-                for item in group
-                if item.year.isdigit() and str(request.year).isdigit()
-            ):
-                continue
+            support_requested = bool(request.year or request.authors or request.journal)
+            support_matches = False
+            if request.year and str(request.year).isdigit():
+                support_matches = support_matches or any(
+                    item.year.isdigit()
+                    and abs(int(item.year) - int(request.year)) <= 1
+                    for item in group
+                )
             if request.authors:
                 query_author = MetadataMergeService._first_author(request.authors)
-                if query_author and not any(
-                    MetadataMergeService._first_author("; ".join(item.authors)) == query_author
+                support_matches = support_matches or bool(
+                    query_author
+                    and any(
+                        MetadataMergeService._first_author("; ".join(item.authors))
+                        == query_author
+                        for item in group
+                        if item.authors
+                    )
+                )
+            if request.journal:
+                support_matches = support_matches or any(
+                    journals_equivalent(request.journal, item.journal)
+                    or journals_equivalent(request.journal, item.journal_abbrev)
                     for item in group
-                    if item.authors
-                ):
-                    continue
+                    if item.journal or item.journal_abbrev
+                )
+            if support_requested and not support_matches:
+                continue
             plausible.append(group)
         return plausible
 

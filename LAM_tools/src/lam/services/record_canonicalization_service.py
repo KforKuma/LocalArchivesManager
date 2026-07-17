@@ -15,7 +15,7 @@ from ..utils.uncertainty import has_user_confirmation
 from .catalogue_service import CatalogueService
 
 
-CANONICAL_PROVIDER_PRIORITY = ("pubmed", "arxiv", "unpaywall")
+CANONICAL_PROVIDER_PRIORITY = ("pubmed", "crossref", "arxiv", "unpaywall")
 
 
 @dataclass(slots=True)
