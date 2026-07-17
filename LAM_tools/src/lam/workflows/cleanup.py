@@ -55,6 +55,7 @@ class CleanupWorkflow:
     LOG_KEEP_COUNT = 5
     JOURNAL_KEEP_DAYS = 30
     TMP_MIN_AGE_HOURS = 24
+    EXPORT_TMP_MIN_AGE_HOURS = 24
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -132,7 +133,9 @@ class CleanupWorkflow:
         candidates.extend(self._log_candidates())
         candidates.extend(self._journal_candidates(now))
         candidates.extend(self._tmp_candidates(now))
+        candidates.extend(self._citation_export_candidates(now))
         candidates.extend(self._metadata_cache_candidates(now))
+        candidates.extend(self._citation_export_cache_candidates(now))
         candidates.extend(self._snapshot_generation_candidates())
         unique: dict[Path, CleanupCandidate] = {}
         for item in candidates:
@@ -333,6 +336,30 @@ class CleanupWorkflow:
                         results.append(candidate)
         return results
 
+    def _citation_export_candidates(
+        self, now: datetime
+    ) -> list[CleanupCandidate]:
+        directory = self.settings.zotero_exports_dir
+        if not directory.is_dir():
+            return []
+        cutoff = now - timedelta(hours=self.EXPORT_TMP_MIN_AGE_HOURS)
+        results: list[CleanupCandidate] = []
+        for path in directory.rglob("*"):
+            if not path.is_file() or path.is_symlink() or self._mtime(path) >= cutoff:
+                continue
+            name = path.name.casefold()
+            if not (
+                (name.startswith(".") and name.endswith(".tmp"))
+                or name.endswith(".failed")
+            ):
+                continue
+            candidate = self._maybe_candidate(
+                path, "citation_export_temporary", "stale_citation_export_artifact"
+            )
+            if candidate:
+                results.append(candidate)
+        return results
+
     def _snapshot_generation_candidates(self) -> list[CleanupCandidate]:
         directory = self.settings.state_dir / "snapshot_generations"
         marker = self.settings.state_dir / "snapshot_commit.json"
@@ -360,6 +387,41 @@ class CleanupWorkflow:
             )
             if candidate:
                 results.append(candidate)
+        return results
+
+    def _citation_export_cache_candidates(
+        self, now: datetime
+    ) -> list[CleanupCandidate]:
+        directory = self.settings.citation_export_cache_dir
+        if not directory.is_dir():
+            return []
+        results: list[CleanupCandidate] = []
+        for path in directory.rglob("*.json"):
+            if path.is_symlink():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                expires = self._parse_datetime(payload.get("expires_at"))
+            except Exception:
+                continue
+            if expires is None or expires > now:
+                continue
+            candidate = self._maybe_candidate(
+                path, "citation_export_cache", "citation_export_cache_expired"
+            )
+            if candidate:
+                results.append(candidate)
+            raw_name = str(payload.get("raw_response") or "")
+            if raw_name and Path(raw_name).name == raw_name:
+                raw_path = path.with_name(raw_name)
+                if raw_path.is_file() and not raw_path.is_symlink():
+                    candidate = self._maybe_candidate(
+                        raw_path,
+                        "citation_export_cache",
+                        "citation_export_cache_expired",
+                    )
+                    if candidate:
+                        results.append(candidate)
         return results
 
     def _candidate(self, path: Path, kind: str, reason: str) -> CleanupCandidate:
@@ -418,6 +480,8 @@ class CleanupWorkflow:
             "completed_operation_journal": (self.settings.state_dir / "runs").resolve(),
             "temporary": (self.settings.state_dir / "tmp").resolve(),
             "metadata_cache": (self.settings.metadata_cache_dir or self.settings.state_dir / "metadata_cache").resolve(),
+            "citation_export_cache": self.settings.citation_export_cache_dir.resolve(),
+            "citation_export_temporary": self.settings.zotero_exports_dir.resolve(),
             "snapshot_generation": (self.settings.state_dir / "snapshot_generations").resolve(),
         }
         allowed = allowed_roots.get(candidate.kind)

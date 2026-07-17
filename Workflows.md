@@ -1191,6 +1191,37 @@ Provider-capable `register`, `search`, and normalization modes share
 provider request. No-cache-write also suppresses persistent provider quota
 counters. Provider-cache and OCR-cache policies are independent and reported.
 
+---
+
+# Zotero-compatible citation export
+
+Run citation export only with an explicit selector and mode:
+
+```text
+lam --root D:\ResearchLibrary --caller agent export zotero --all --dry-run
+lam --root D:\ResearchLibrary --caller agent export zotero --all --apply
+lam --root D:\ResearchLibrary --caller agent export zotero --paper-uuid UUID --apply
+lam --root D:\ResearchLibrary --caller agent export zotero --topic-folder TOPIC --apply
+```
+
+The three selectors are mutually exclusive. NBIB is the default; optional
+`--format pubmed-xml` exports only official records with PMID. Registered
+papers are selected through Documents, while `Exports/` remains outside all
+Workflow 1–4 scans and is never added to Documents.
+
+For PMID records, use PubMed EFetch and validate that the returned record has
+the requested PMID before caching or exporting it. For records without PMID,
+generate a LAM-authored NBIB only when title, at least one author, year, and
+journal/publication source are available. Preserve Catalogue values, fill only
+blank export-projection fields from valid exact-match provider cache entries,
+and mark local output with `DB - LAM` and `OWN - LAM`.
+
+`--offline`, `--refresh`, and `--no-cache-write` affect only provider behavior
+and the dedicated `.library_state/cache/citation_export/` response cache.
+Export obtains a separate export lock, validates and atomically commits output,
+refuses to overwrite non-LAM content, writes one report, and does not acquire
+the workbook mutation lock or run Workflow 1 final-check.
+
 All JSON success, workflow failure, and parser failure output uses schema
 version 1 with exactly one object on stdout. Exit code 2 is reserved for
 `needs_review`; parser, configuration, and lock errors use 10. Every dispatched
@@ -1252,6 +1283,9 @@ Eligible machine-generated artifacts are limited to:
 - expired metadata-cache entries according to their recorded TTL;
 - snapshot-generation backups other than the active and immediately previous
   generations.
+- expired citation-export cache entries and stale failed/temporary export
+  artifacts; formal `library.nbib`, `library.pubmed.xml`, per-record outputs,
+  ownership manifests, and user-selected custom output paths are retained.
 
 Cleanup must never select a PDF, `catalogue.xlsx`, `AGENTS.md`, `Workflows.md`,
 `summary.md`, ordinary topic content, symlink/reparse content, or anything

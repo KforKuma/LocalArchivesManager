@@ -25,6 +25,8 @@ class CommandDefinition:
     modifies_managed_files: bool = False
     modifies_catalogue: bool = False
     requires_lock: bool = False
+    requires_export_lock: bool = False
+    writes_export_artifacts: bool = False
     runs_final_check: bool = False
     supports_dry_run: bool = False
     actual_exit_codes: tuple[int, ...] = (0, 10, 30)
@@ -140,6 +142,34 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=LOCAL_WORKFLOW_CODES,
         report_type="catalogue_filing",
+    ),
+    CommandDefinition(
+        "export",
+        "Export registered citations for Zotero without modifying the library",
+        "Citation export",
+        "export",
+        (
+            *GLOBAL,
+            "zotero",
+            "--all",
+            "--paper-uuid",
+            "--topic-folder",
+            "--format",
+            "--official-only",
+            "--offline",
+            "--refresh",
+            "--no-cache-write",
+            "--output",
+            "--dry-run",
+            "--apply",
+        ),
+        writes_cache=True,
+        uses_network=True,
+        requires_export_lock=True,
+        writes_export_artifacts=True,
+        supports_dry_run=True,
+        actual_exit_codes=NETWORK_WORKFLOW_CODES,
+        report_type="citation_export",
     ),
     CommandDefinition(
         "review",
@@ -291,7 +321,7 @@ def command_definition(name: str) -> CommandDefinition:
 
 def canonical_command(name: str, subcommand: str | None = None) -> str:
     definition = command_definition(name)
-    if name in {"status", "migrate"} and subcommand:
+    if name in {"status", "migrate", "export"} and subcommand:
         return f"{name} {subcommand}"
     return definition.canonical_command or name
 

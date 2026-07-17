@@ -57,6 +57,7 @@ class ReportService:
             "cleanup": "Machine-generated file cleanup report",
             "topic_migration": "Topics namespace migration report",
             "command_registry": "LAM public command registry",
+            "citation_export": "Zotero citation export report",
         }.get(result.workflow, result.workflow)
         lines = [
             f"# {title}",

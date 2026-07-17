@@ -15,6 +15,7 @@ DEFAULT_RESERVED_ROOT_DIRECTORIES = frozenset(
         "Inbox",
         "Registered",
         "Topics",
+        "Exports",
         "LAM_tools",
         "scripts",
         "build",

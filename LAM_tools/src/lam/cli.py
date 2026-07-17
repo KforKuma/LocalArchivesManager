@@ -38,6 +38,7 @@ from .services.catalogue_preflight_service import CataloguePreflightService
 from .services.invocation_service import InvocationService
 from .workflows.catalogue_filing import CatalogueFilingWorkflow
 from .workflows.cleanup import CleanupWorkflow
+from .workflows.citation_export import CitationExportWorkflow
 from .workflows.command_audit import CommandAuditWorkflow
 from .workflows.daily_check import DailyCheckWorkflow
 from .workflows.doctor import DoctorWorkflow
@@ -62,7 +63,7 @@ EXIT_CODES = {
 CALLERS = ("user", "agent", "internal_workflow", "scheduled", "unknown")
 JSON_SCHEMA_VERSION = "1"
 PUBLIC_COMMAND_METAVAR = (
-    "{init,check,register,search,file,review,status,recover,migrate,cleanup,doctor,commands}"
+    "{init,check,register,search,file,export,review,status,recover,migrate,cleanup,doctor,commands}"
 )
 
 
@@ -126,7 +127,7 @@ def _add_provider_policy_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-cache-write",
         action="store_true",
-        help="Do not write metadata cache or persistent provider quota counters",
+        help="Do not write provider caches or persistent provider quota counters",
     )
 
 
@@ -177,6 +178,20 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--download-timeout", type=float, metavar="SECONDS")
 
     subparsers.add_parser("file", parents=[daily], help=command_definition("file").purpose)
+
+    export = subparsers.add_parser(
+        "export", parents=[shared], help=command_definition("export").purpose
+    )
+    export_subparsers = export.add_subparsers(dest="export_command", required=True)
+    zotero = export_subparsers.add_parser("zotero", parents=[maintenance])
+    export_target = zotero.add_mutually_exclusive_group(required=True)
+    export_target.add_argument("--all", action="store_true", dest="all_records")
+    export_target.add_argument("--paper-uuid")
+    export_target.add_argument("--topic-folder")
+    zotero.add_argument("--format", choices=("nbib", "pubmed-xml"), default="nbib", dest="format_name")
+    zotero.add_argument("--official-only", action="store_true")
+    _add_provider_policy_options(zotero)
+    zotero.add_argument("--output", type=Path)
 
     review = subparsers.add_parser(
         "review", parents=[maintenance], help=command_definition("review").purpose
@@ -288,12 +303,20 @@ def _close_logging_handlers(handlers: list[logging.Handler]) -> None:
 
 
 def _invoked_command(args: argparse.Namespace) -> str:
-    nested = getattr(args, "status_command", None) or getattr(args, "migrate_command", None)
+    nested = (
+        getattr(args, "status_command", None)
+        or getattr(args, "migrate_command", None)
+        or getattr(args, "export_command", None)
+    )
     return f"{args.command} {nested}" if nested else args.command
 
 
 def _canonical(args: argparse.Namespace) -> str:
-    nested = getattr(args, "status_command", None) or getattr(args, "migrate_command", None)
+    nested = (
+        getattr(args, "status_command", None)
+        or getattr(args, "migrate_command", None)
+        or getattr(args, "export_command", None)
+    )
     return canonical_command(args.command, nested)
 
 
@@ -434,6 +457,19 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
         return DailyCheckWorkflow(settings).run(dry_run=args.dry_run)
     if args.command == "file":
         return CatalogueFilingWorkflow(settings).run(dry_run=args.dry_run)
+    if args.command == "export":
+        return CitationExportWorkflow(settings).run(
+            dry_run=args.dry_run,
+            all_records=args.all_records,
+            paper_uuid=args.paper_uuid,
+            topic_folder=args.topic_folder,
+            format_name=args.format_name,
+            official_only=args.official_only,
+            offline=args.offline,
+            refresh=args.refresh,
+            cache_write=not args.no_cache_write,
+            output=args.output,
+        )
     if args.command in {"doctor", "status"}:
         status_command = "environment" if args.command == "doctor" else args.status_command
         if status_command == "environment":
@@ -621,7 +657,7 @@ def _raw_invocation_context(raw: list[str]) -> tuple[str, Path | None, str]:
 def _raw_canonical(command: str, raw: list[str]) -> str:
     if not command:
         return ""
-    nested = next((item for item in ("library", "environment", "commands", "recovery", "config", "identifiers", "topics") if item in raw), None)
+    nested = next((item for item in ("library", "environment", "commands", "recovery", "config", "identifiers", "topics", "zotero") if item in raw), None)
     try:
         return canonical_command(command, nested)
     except KeyError:

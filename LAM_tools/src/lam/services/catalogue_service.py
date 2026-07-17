@@ -45,9 +45,16 @@ UNCERTAINTY_PREFIXES = ("NEEDS_REVIEW:", "USER_CONFIRMED:", "MACHINE_NOTE:", "RE
 
 
 class CatalogueService:
-    def __init__(self, path: Path, *, allow_legacy_schema: bool = False):
+    def __init__(
+        self,
+        path: Path,
+        *,
+        allow_legacy_schema: bool = False,
+        allow_citation_duplicates: bool = False,
+    ):
         self.path = path
         self.allow_legacy_schema = allow_legacy_schema
+        self.allow_citation_duplicates = allow_citation_duplicates
         self.workbook = None
         self.worksheet = None
         self.headers: dict[str, int] = {}
@@ -97,7 +104,11 @@ class CatalogueService:
             }
             if any(value not in (None, "") for value in values.values()):
                 self.records.append(CatalogueRecord(row_number=row_number, values=values))
-        self._validate_duplicate_values()
+        self._validate_duplicate_values(
+            ("paper_uuid", "arxiv_id")
+            if self.allow_citation_duplicates
+            else ("paper_uuid", "doi", "pmid", "arxiv_id")
+        )
         self._load_documents()
         if not self.allow_legacy_schema and not self.has_documents_sheet:
             raise CatalogueError(
@@ -260,9 +271,17 @@ class CatalogueService:
         if duplicates:
             raise CatalogueError(f"Duplicate catalogue columns: {sorted(set(duplicates))}")
 
-    def _validate_duplicate_values(self) -> None:
+    def _validate_duplicate_values(
+        self, fields: tuple[str, ...] | None = None
+    ) -> None:
+        if fields is None:
+            fields = (
+                ("paper_uuid", "arxiv_id")
+                if self.allow_citation_duplicates
+                else ("paper_uuid", "doi", "pmid", "arxiv_id")
+            )
         problems: list[str] = []
-        for field_name in ("paper_uuid", "doi", "pmid", "arxiv_id"):
+        for field_name in fields:
             if field_name not in self.headers:
                 continue
             seen: dict[str, int] = {}

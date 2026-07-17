@@ -46,7 +46,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.5.5"
+    user_agent: str = "LAM/0.5.6"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +135,10 @@ class Settings:
     invocations_dir: Path
     changes_log_path: Path
     lock_path: Path
+    exports_dir: Path
+    zotero_exports_dir: Path
+    citation_export_cache_dir: Path
+    export_lock_path: Path
     max_filename_length: int = 180
     pdf_max_pages: int = 3
     pdf_max_chars_per_page: int = 12_000
@@ -183,7 +187,7 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.5").strip() or "LAM/0.5.5",
+            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.6").strip() or "LAM/0.5.6",
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")
@@ -267,6 +271,12 @@ class Settings:
             invocations_dir=library_root / ".library_state" / "invocations",
             changes_log_path=library_root / "library_changes.md",
             lock_path=library_root / ".library_state" / "lam.lock",
+            exports_dir=library_root / "Exports",
+            zotero_exports_dir=library_root / "Exports" / "Zotero",
+            citation_export_cache_dir=(
+                library_root / ".library_state" / "cache" / "citation_export"
+            ),
+            export_lock_path=library_root / ".library_state" / "citation_export.lock",
             metadata_cache_dir=library_root / ".library_state" / "metadata_cache",
             network=network,
             pubmed=pubmed,

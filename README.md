@@ -1,8 +1,9 @@
 # LAM — Local Archives Manager
 
 LAM is a deterministic local manager for a biomedical literature library.
-Version 0.5.5 provides pure-CLI initialization, review, status, recovery and
-migration in addition to Workflow 1–4. It never reads or modifies `summary.md`.
+Version 0.5.6 adds read-only, Zotero-compatible citation export to the pure-CLI
+initialization, review, status, recovery, migration and Workflow 1–4 commands.
+It never reads or modifies `summary.md`.
 
 ```text
 ResearchLibrary/
@@ -39,6 +40,7 @@ This table is generated from the same registry returned by
 | `lam register` | daily | Identify and register Inbox papers and supplementary documents | yes | yes |
 | `lam search` | daily | Query providers and optionally update, normalize, or download records | yes | yes |
 | `lam file` | daily | File or refile registered Documents under Topics/ | yes | no |
+| `lam export` | export | Export registered citations for Zotero without modifying the library | yes | yes |
 | `lam review` | maintenance | Recheck and clear objectively resolved machine blockers | yes | yes |
 | `lam status` | diagnostic | Inspect library, environment, commands, recovery, or configuration | no | yes |
 | `lam recover` | maintenance | Recover interrupted operations and unambiguous record bindings | yes | yes |
@@ -141,6 +143,27 @@ retain bounded Chinese or English local metadata in a provisional Catalogue
 row, but creates no Documents row and does not move the file until identity is
 confirmed. Supplementary registration never calls Workflow 2.
 
+## Zotero-compatible citation export
+
+Citation export requires an explicit target and mode. It writes regenerable
+artifacts under `Exports/Zotero/` by default, but never changes Catalogue,
+Documents, PDFs, Zotero databases, or topic paths and does not run Workflow 1.
+
+```powershell
+lam --root D:\ResearchLibrary export zotero --all --dry-run
+lam --root D:\ResearchLibrary export zotero --all --apply
+lam --root D:\ResearchLibrary export zotero --paper-uuid UUID --apply
+lam --root D:\ResearchLibrary export zotero --topic-folder "Topic A" --apply
+lam --root D:\ResearchLibrary export zotero --all --format pubmed-xml --apply
+```
+
+Records with PMID use validated PubMed EFetch MEDLINE/NBIB (or official XML).
+Records without PMID may use a clearly marked `DB - LAM` / `OWN - LAM` local
+NBIB only when title, author, year and journal are complete. `--official-only`
+skips local records. `--offline`, `--refresh`, and `--no-cache-write` control a
+dedicated citation-response cache without changing metadata provider caches.
+Existing non-LAM output files are never overwritten.
+
 ## Migration and cleanup
 
 Maintenance and migration commands require exactly one of `--dry-run` and
@@ -173,7 +196,7 @@ NCBI_EMAIL=you@example.org
 NCBI_TOOL=LAM
 NCBI_API_KEY=
 UNPAYWALL_EMAIL=you@example.org
-HTTP_USER_AGENT=LAM/0.5.5
+HTTP_USER_AGENT=LAM/0.5.6
 OCR_ENABLED=true
 OCR_LANGUAGES=en
 OCR_DPI=250

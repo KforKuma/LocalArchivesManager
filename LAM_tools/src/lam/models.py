@@ -104,6 +104,33 @@ class DocumentRecord:
 
 
 @dataclass(slots=True)
+class CitationExportRecord:
+    """Read-only citation projection; never written back to Catalogue."""
+
+    paper_uuid: str
+    record_source: str = "lam_generated"
+    title: str = ""
+    authors: list[str] = field(default_factory=list)
+    year: str = ""
+    journal: str = ""
+    journal_abbrev: str = ""
+    volume: str = ""
+    issue: str = ""
+    pages: str = ""
+    doi: str = ""
+    pmid: str = ""
+    arxiv_id: str = ""
+    abstract: str = ""
+    keywords: list[str] = field(default_factory=list)
+    publication_type: str = ""
+    language: str = ""
+    issn: str = ""
+    affiliations: list[str] = field(default_factory=list)
+    topic_folder: str = ""
+    provenance: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class FileSnapshot:
     relative_path: str
     filename: str

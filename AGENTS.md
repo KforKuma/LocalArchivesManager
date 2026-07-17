@@ -34,6 +34,8 @@ Root/
 |   |   |-- summary.md
 |   |   `-- PDFs...
 |   `-- Topic_B/
+|-- Exports/
+|   `-- Zotero/
 |-- LAM_tools/
 |-- scripts/
 |-- build/
@@ -49,6 +51,8 @@ Directory meanings:
   stores a path relative to this directory, while `Documents.relative_path`
   includes the leading `Topics/` component.
 - `.library_state/`: machine-maintained derived state used for incremental comparison. It is not a user-facing source of truth.
+- `Exports/`: regenerable citation artifacts only; it is outside Documents and
+  every library-file workflow.
 
 ---
 
@@ -234,6 +238,10 @@ This means:
   empty legacy directory entry.
 - An explicit `lam cleanup --apply` may remove only allowlisted
   machine-generated artifacts selected under the documented retention policy.
+- An explicit `lam export zotero ... --apply` may create or update only
+  LAM-owned citation artifacts at the selected output path. It never changes
+  Catalogue, Documents, PDFs, topic paths, Zotero state, or the official
+  snapshot and never runs Workflow 1.
 - An explicit `lam review --apply` may clear only objectively resolved machine
   blockers; it may not create user confirmation or change user-owned fields.
 - An explicit `lam recover --apply` may repair interrupted or inconsistent
