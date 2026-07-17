@@ -139,7 +139,7 @@ def incomplete_journals(state_dir: Path) -> list[dict[str, Any]]:
         except Exception:
             results.append({"journal": str(path), "status": "unreadable"})
             continue
-        if payload.get("status") != "final_check_committed":
+        if payload.get("status") not in {"final_check_committed", "recovered"}:
             results.append(
                 {
                     "journal": str(path),

@@ -359,7 +359,7 @@ class FileService:
             if len(root_relative.parts) >= 2:
                 raise FileOperationError(
                     "legacy_topic_location: Workflow 4 will not create or move from "
-                    "root-level topic directories; run migrate-topics."
+                    "root-level topic directories; run 'lam migrate topics --dry-run'."
                 ) from exc
             raise FileOperationError(
                 f"Workflow 4 only accepts Registered or Topics PDFs: {source}"

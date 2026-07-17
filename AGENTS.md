@@ -99,7 +99,7 @@ You must not:
 - infer catalogue metadata from it.
 
 The presence or contents of `summary.md` must not affect any workflow. The
-explicit `migrate-topics` command may carry it as an opaque member of a whole
+explicit `migrate topics` command may carry it as an opaque member of a whole
 directory move, without opening or changing it.
 
 ---
@@ -118,7 +118,7 @@ notes
 
 User-authored entries in `uncertainty` are also protected.
 
-The sole structural exception is explicit `migrate-topics --apply`, which may
+The sole structural exception is explicit `migrate topics --apply`, which may
 normalize historical `topic_folder = Topics/<path>` to the semantically
 equivalent `<path>`; it must not otherwise change the user's classification.
 
@@ -222,16 +222,26 @@ An explicit request to run a workflow authorizes the routine, reversible actions
 
 This means:
 
+- An explicit `lam init --apply` may create a new library only at an absent or
+  demonstrably empty target and establish its initial Workflow 1 baseline.
 - Workflow 2 may update eligible metadata and perform an explicitly requested download.
 - Workflow 3 may rename successfully identified files and move them from `Inbox/` to `Registered/`.
 - Workflow 4 may move registered files from `Registered/` or existing paths
   below `Topics/` according to confirmed `topic_folder` values, and may remove
   only a truly empty old topic directory below `Topics/`.
-- An explicit `lam migrate-topics --apply` may move confirmed legacy root topic
+- An explicit `lam migrate topics --apply` may move confirmed legacy root topic
   directories into `Topics/`, normalize legacy paths, and remove only the now
   empty legacy directory entry.
 - An explicit `lam cleanup --apply` may remove only allowlisted
   machine-generated artifacts selected under the documented retention policy.
+- An explicit `lam review --apply` may clear only objectively resolved machine
+  blockers; it may not create user confirmation or change user-owned fields.
+- An explicit `lam recover --apply` may repair interrupted or inconsistent
+  machine state within its selected scope; only Inbox recovery may re-enter
+  Workflow 3 or use provider policy, and filed documents are never
+  re-registered.
+- An explicit `lam migrate identifiers --apply` may upgrade only a recognized
+  legacy workbook schema; unknown or future schemas must be refused.
 - These routine actions do not require separate per-file approval.
 
 Additional confirmation is required only when an action involves:
