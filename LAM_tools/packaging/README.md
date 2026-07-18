@@ -1,6 +1,6 @@
 # Windows PyInstaller packaging
 
-`lam.spec` builds the LAM 0.6.1 console-mode Windows onedir application. It is
+`lam.spec` builds the current LAM package-version console-mode Windows onedir application. It is
 relative to `SPECPATH`, uses PyInstaller's official hooks plus
 `pyinstaller-hooks-contrib`, restricts EasyOCR language data to English, and
 does not collect tests, local configuration, model caches or library data.
@@ -30,8 +30,8 @@ Build and stage without modifying PATH:
 .\scripts\stage_onedir.ps1 -PythonExe C:\path\to\python.exe
 ```
 
-The clean PyInstaller tree is written to `D:\LAM_build\dist\LAM-0.6.1` and
+The clean PyInstaller tree is written to `D:\LAM_build\dist\LAM-<package-version>` and
 the complete release staging tree to
-`D:\LAM_build\release\LAM-0.6.1-windows-x64`. Frozen runtime resources remain
+`D:\LAM_build\release\LAM-<package-version>-windows-x64`. Frozen runtime resources remain
 outside `_internal/` at `models/easyocr/` and `vendor/poppler/`; LAM forces the
 former with downloads disabled and prefers the bundled Poppler directory.

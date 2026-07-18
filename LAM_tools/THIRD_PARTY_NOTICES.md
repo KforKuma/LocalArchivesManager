@@ -1,6 +1,6 @@
 # Third-party notices
 
-LAM 0.6.1 on Windows is distributed as a PyInstaller onedir application. The
+LAM 0.6.1-rc1 on Windows is distributed as a PyInstaller onedir application. The
 release asset manifests record the exact model and Poppler files included in a
 particular staging tree.
 

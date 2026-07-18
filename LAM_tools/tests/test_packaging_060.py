@@ -24,6 +24,7 @@ def test_pyinstaller_spec_is_relative_and_onedir():
     assert 'contents_directory="_internal"' in spec
     assert 'hooksconfig={"easyocr": {"lang_codes": ["en"]}}' in spec
     assert "collect_all" not in spec
+    assert '"direct_url.json"' in spec
     assert "hookspath=[]" in spec
     assert "D:\\ResearchLibrary" not in spec
 
@@ -41,6 +42,17 @@ def test_build_script_uses_independent_build_root():
     assert '"--distpath"' in script
     assert "-m\", \"PyInstaller" in script
     assert "D:\\ResearchLibrary must never be used" in script
+
+
+def test_asset_preparation_sanitizes_conda_prefix_before_manifest_hashing():
+    source_root = Path(__file__).resolve().parents[1]
+    script = (source_root / "scripts" / "prepare_release_assets.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "fontconfig_readme" in script
+    assert 'prefix.as_posix().encode("utf-8")' in script
+    assert 'b"C:/LAM_Build/asset-env"' in script
 
 
 def test_frozen_easyocr_probe_does_not_relaunch_lam_exe(monkeypatch):

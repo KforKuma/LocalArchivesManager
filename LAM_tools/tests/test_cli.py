@@ -118,11 +118,11 @@ def test_cli_version_uses_package_version(capsys):
         build_parser().parse_args(["--version"])
     assert exit_info.value.code == 0
     assert capsys.readouterr().out.strip() == __version__
-    assert __version__ == PACKAGE_VERSION == "0.6.1"
+    assert __version__ == PACKAGE_VERSION == "0.6.1-rc1"
 
 
 def test_version_contracts_are_independent_constants():
-    assert PACKAGE_VERSION == "0.6.1"
+    assert PACKAGE_VERSION == "0.6.1-rc1"
     assert LIBRARY_SCHEMA_VERSION == "0.6.1"
     assert JSON_SCHEMA_VERSION == "1"
 

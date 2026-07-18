@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import subprocess
 from pathlib import Path
@@ -178,6 +179,9 @@ def main() -> int:
     model_files = sorted((release / "models" / "easyocr").glob("*.pth"))
     model_hashes_before = {path.name: sha256(path) for path in model_files}
     results: list[dict[str, Any]] = []
+    expected_version = runpy.run_path(str(source / "src" / "lam" / "versions.py"))[
+        "PACKAGE_VERSION"
+    ]
 
     version = run(
         executable,
@@ -187,7 +191,7 @@ def main() -> int:
         "version",
         json_output=False,
     )
-    if "0.6.1" not in version:
+    if expected_version not in version:
         raise RuntimeError(f"Unexpected frozen version output: {version}")
     commands_root = smoke_root / "commands-root"
     commands = run(

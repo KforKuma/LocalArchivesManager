@@ -1223,7 +1223,7 @@
       "path": "etc/fonts/conf.d/README",
       "role": "runtime_data",
       "size_bytes": 1005,
-      "sha256": "3f79cb048a5bfec977732c5f8e3566515b979cfea17a333465281c0551bb92d6"
+      "sha256": "aa10674add22c4ce65399d18b625ff437bf2c3cc92b13e9fbd861258f6b28840"
     },
     {
       "path": "etc/fonts/fonts.conf",

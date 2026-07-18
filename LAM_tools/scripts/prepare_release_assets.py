@@ -134,6 +134,19 @@ def prepare_poppler(
             destination = target / Path(*relative.parts[1:])
             shutil.copytree(source, destination, dirs_exist_ok=True)
 
+    # Conda's generated fontconfig README embeds the absolute preparation
+    # prefix. Normalize only that byte sequence before hashing so reviewed
+    # manifests and release candidates never disclose the local build root.
+    fontconfig_readme = target / "etc" / "fonts" / "conf.d" / "README"
+    if fontconfig_readme.is_file():
+        content = fontconfig_readme.read_bytes()
+        sanitized = content.replace(
+            prefix.as_posix().encode("utf-8"),
+            b"C:/LAM_Build/asset-env",
+        )
+        if sanitized != content:
+            fontconfig_readme.write_bytes(sanitized)
+
     packages: list[dict[str, Any]] = []
     licenses_root = target / "licenses"
     for record_path in sorted((prefix / "conda-meta").glob("*.json")):

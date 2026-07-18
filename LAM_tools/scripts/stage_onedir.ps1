@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$BuildRoot = "D:\LAM_build",
-    [string]$ReleaseName = "LAM-0.6.1-windows-x64",
+    [string]$ReleaseName = "",
     [string]$PythonExe = "python"
 )
 
@@ -9,7 +9,22 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $RepositoryRoot = (Resolve-Path -LiteralPath (Join-Path $ProjectRoot "..")).Path
 $BuildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
-$Source = Join-Path $BuildRoot "dist\LAM-0.6.1"
+$VersionFile = Join-Path $ProjectRoot "src\lam\versions.py"
+$oldVersionFile = $env:LAM_VERSION_FILE
+$env:LAM_VERSION_FILE = $VersionFile
+try {
+    $PackageVersion = (& $PythonExe -c "import os, runpy; print(runpy.run_path(os.environ['LAM_VERSION_FILE'])['PACKAGE_VERSION'])").Trim()
+}
+finally {
+    $env:LAM_VERSION_FILE = $oldVersionFile
+}
+if (-not $PackageVersion) {
+    throw "Could not read PACKAGE_VERSION from: $VersionFile"
+}
+if (-not $ReleaseName) {
+    $ReleaseName = "LAM-$PackageVersion-windows-x64"
+}
+$Source = Join-Path $BuildRoot ("dist\LAM-" + $PackageVersion)
 $Release = Join-Path $BuildRoot ("release\" + $ReleaseName)
 $Packaging = Join-Path $ProjectRoot "packaging"
 
@@ -61,7 +76,28 @@ foreach ($item in $documents) {
     Copy-Item -LiteralPath $item.Source -Destination (Join-Path $releaseFull $item.Target) -Force
 }
 
-& $PythonExe (Join-Path $PSScriptRoot "verify_release_tree.py") --release-root $releaseFull
+# Public source documentation intentionally uses the maintainer's real library
+# root in examples. The distributable copy must not disclose that development
+# path, including package-resource and distribution-metadata copies collected
+# under _internal. Source documents and package templates remain byte-identical.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$textNames = @("METADATA", "README", ".env.example")
+$textExtensions = @(".md", ".txt", ".json", ".bat")
+foreach ($path in Get-ChildItem -LiteralPath $releaseFull -Recurse -File) {
+    if ($path.Name -notin $textNames -and $path.Extension.ToLowerInvariant() -notin $textExtensions) {
+        continue
+    }
+    $text = [System.IO.File]::ReadAllText($path.FullName)
+    $sanitized = $text.Replace("D:\ResearchLibrary", "C:\LAM_Library")
+    $sanitized = $sanitized.Replace("D:/ResearchLibrary", "C:/LAM_Library")
+    $sanitized = $sanitized.Replace("D:\LAM_build", "C:\LAM_Build")
+    $sanitized = $sanitized.Replace("D:/LAM_build", "C:/LAM_Build")
+    if ($sanitized -ne $text) {
+        [System.IO.File]::WriteAllText($path.FullName, $sanitized, $utf8NoBom)
+    }
+}
+
+& $PythonExe (Join-Path $PSScriptRoot "verify_release_tree.py") --release-root $releaseFull --forbidden-string $env:USERNAME
 if ($LASTEXITCODE -ne 0) {
     throw "Release-tree verification failed"
 }

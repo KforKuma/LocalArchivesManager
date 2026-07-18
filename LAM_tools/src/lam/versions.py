@@ -1,6 +1,6 @@
 """Public version identifiers for LAM's independent contracts."""
 
-PACKAGE_VERSION = "0.6.1"
+PACKAGE_VERSION = "0.6.1-rc1"
 LIBRARY_SCHEMA_VERSION = "0.6.1"
 JSON_SCHEMA_VERSION = "1"
 

@@ -81,6 +81,8 @@ a.datas = [
     entry
     for entry in a.datas
     if "tests" not in entry[0].replace("\\", "/").split("/")
+    and entry[0].replace("\\", "/").split("/")[-1].casefold()
+    != "direct_url.json"
 ]
 
 pyz = PYZ(a.pure)

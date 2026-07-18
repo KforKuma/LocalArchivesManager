@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lam-tools"
-version = "0.6.1"
+version = "0.6.1-rc1"
 description = "Deterministic local maintenance tools for a research literature library"
 readme = "README.md"
 license = {file = "LICENSE"}

@@ -32,6 +32,14 @@ FORBIDDEN_NAMES = {
     ".pytest_cache",
     "__pycache__",
 }
+FORBIDDEN_NAMES_CASEFOLDED = {name.casefold() for name in FORBIDDEN_NAMES}
+FORBIDDEN_CONTENT = {
+    "real_library_windows": r"D:\ResearchLibrary",
+    "real_library_posix": "D:/ResearchLibrary",
+    "build_root_windows": r"D:\LAM_build",
+    "build_root_posix": "D:/LAM_build",
+    "developer_archive": "开发资料",
+}
 
 
 def sha256(path: Path) -> str:
@@ -76,7 +84,39 @@ def verify_manifest(root: Path, manifest_path: Path) -> dict[str, Any]:
     return result
 
 
-def verify_release(release: Path) -> dict[str, Any]:
+def forbidden_content(
+    path: Path,
+    extra_forbidden: tuple[str, ...] = (),
+) -> list[str]:
+    encoded: list[tuple[str, bytes]] = []
+    values = dict(FORBIDDEN_CONTENT)
+    values.update(
+        {
+            f"caller_supplied_{index}": value
+            for index, value in enumerate(extra_forbidden, start=1)
+            if value
+        }
+    )
+    for label, value in values.items():
+        encoded.append((label, value.encode("utf-8").lower()))
+        encoded.append((label, value.encode("utf-16le").lower()))
+    overlap = max(len(value) for _, value in encoded) - 1
+    previous = b""
+    found: set[str] = set()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            window = (previous + block).lower()
+            for label, value in encoded:
+                if value in window:
+                    found.add(label)
+            previous = window[-overlap:] if overlap else b""
+    return sorted(found)
+
+
+def verify_release(
+    release: Path,
+    extra_forbidden: tuple[str, ...] = (),
+) -> dict[str, Any]:
     errors: list[str] = []
     if not release.is_dir():
         return {"ok": False, "errors": ["release_root_missing"]}
@@ -87,10 +127,13 @@ def verify_release(release: Path) -> dict[str, Any]:
         errors.append("required_directory_missing:_internal")
     for path in release.rglob("*"):
         relative = path.relative_to(release)
-        if any(part in FORBIDDEN_NAMES for part in relative.parts):
+        if any(part.casefold() in FORBIDDEN_NAMES_CASEFOLDED for part in relative.parts):
             errors.append(f"forbidden_path:{relative.as_posix()}")
         if path.is_file() and path.suffix.casefold() == ".pdf":
             errors.append(f"unexpected_pdf:{relative.as_posix()}")
+        if path.is_file():
+            for label in forbidden_content(path, extra_forbidden):
+                errors.append(f"forbidden_content:{label}:{relative.as_posix()}")
     model = verify_manifest(
         release / "models" / "easyocr",
         release / "models" / "easyocr" / "manifest.json",
@@ -119,8 +162,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Verify a staged LAM onedir tree")
     parser.add_argument("--release-root", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument("--forbidden-string", action="append", default=[])
     args = parser.parse_args()
-    result = verify_release(args.release_root.resolve())
+    result = verify_release(
+        args.release_root.resolve(),
+        tuple(args.forbidden_string),
+    )
     text = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     print(text, end="")
     if args.json_output:
