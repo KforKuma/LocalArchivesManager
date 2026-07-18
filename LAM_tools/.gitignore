@@ -33,6 +33,7 @@ release_staging/
 packaging/cache/
 packaging/vendor/
 packaging/models/
+packaging/assets/easyocr-models/
 *.spec.local
 *.pdf
 !examples/test_corpus/included/*.pdf

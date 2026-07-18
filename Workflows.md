@@ -952,6 +952,14 @@ Each candidate uses the strongest available route:
 PMID exact > DOI exact > arXiv exact > supported Crossref title > applicable fallback
 ```
 
+When an exact identifier has no provider record but a parsed title is present,
+the resolver continues with the same conservative bibliographic/title route.
+Unresolved-candidate reports retain the raw and normalized entry, parsed
+bibliographic fields, extracted identifiers, selected strategy, sanitized
+queries, cache/HTTP/result counts, bounded top candidates, scores, rejection
+reasons, and final resolution reason. They never include API keys or secret
+configuration values.
+
 Title results require author, year or journal support; provider rank alone is
 never identity evidence. Before Catalogue mutation, deduplicate within the
 batch and existing Catalogue by PMID, DOI, arXiv ID, then title + first author +

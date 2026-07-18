@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .exceptions import ConfigurationError
 from .directory_policy import parse_reserved_root_directories
+from .runtime_resources import frozen_easyocr_configuration, resolve_poppler_bin
 from .versions import PACKAGE_VERSION
 
 
@@ -296,6 +297,17 @@ class Settings:
             raise ConfigurationError("OCR_GPU must be auto, true, or false")
         model_dir = os.getenv("OCR_MODEL_STORAGE_DIR", "").strip()
         poppler_path = os.getenv("POPPLER_PATH", "").strip()
+        explicit_model_dir = (
+            Path(model_dir).expanduser().resolve() if model_dir else None
+        )
+        explicit_poppler_dir = (
+            Path(poppler_path).expanduser().resolve() if poppler_path else None
+        )
+        resolved_model_dir, resolved_download_enabled, _ = frozen_easyocr_configuration(
+            explicit_model_dir,
+            _env_bool("OCR_DOWNLOAD_ENABLED", False),
+        )
+        resolved_poppler_dir, _ = resolve_poppler_bin(explicit_poppler_dir)
         preprocessing = os.getenv("OCR_PREPROCESSING_MODE", "raw").strip().casefold()
         if preprocessing not in {"raw", "grayscale_autocontrast"}:
             raise ConfigurationError(
@@ -306,9 +318,9 @@ class Settings:
             languages=languages,
             dpi=max(72, min(600, _env_int("OCR_DPI", 250))),
             gpu=gpu,
-            model_storage_dir=Path(model_dir).expanduser().resolve() if model_dir else None,
-            download_enabled=_env_bool("OCR_DOWNLOAD_ENABLED", False),
-            poppler_path=Path(poppler_path).expanduser().resolve() if poppler_path else None,
+            model_storage_dir=resolved_model_dir,
+            download_enabled=resolved_download_enabled,
+            poppler_path=resolved_poppler_dir,
             max_image_pixels=max(1_000_000, _env_int("OCR_MAX_IMAGE_PIXELS", 25_000_000)),
             timeout_seconds=max(1.0, _env_float("OCR_TIMEOUT_SECONDS", 120.0)),
             min_text_chars=max(1, _env_int("OCR_MIN_TEXT_CHARS", 80)),

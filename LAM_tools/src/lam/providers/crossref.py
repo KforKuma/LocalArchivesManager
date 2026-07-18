@@ -74,16 +74,22 @@ class CrossrefProvider:
             return offline_result(self.name, query_type, query_value)
 
         stats = ProviderStats()
+        http_status: int | None = None
+        queries_attempted: list[dict[str, object]] = []
         try:
             if query_type == "doi":
+                queries_attempted.append(
+                    {"route": "/works/{doi}", "query_type": "doi", "query": normalized}
+                )
                 response = self.http.get(
                     f"{self.config.base_url}/works/{quote(normalized, safe='')}",
                     params=self._polite_params(),
                 )
             else:
+                bibliographic = self._bibliographic_query(request)
                 params = {
                     **self._polite_params(),
-                    "query.bibliographic": self._bibliographic_query(request),
+                    "query.bibliographic": bibliographic,
                     "rows": str(
                         max(
                             1,
@@ -97,14 +103,23 @@ class CrossrefProvider:
                     "select": (
                         "DOI,title,author,published,published-print,published-online,"
                         "issued,container-title,short-container-title,type,abstract,"
-                        "subject,language,URL,ISSN,volume,issue,page"
+                        "subject,URL,ISSN,volume,issue,page"
                     ),
                 }
                 if request.authors:
                     params["query.author"] = request.authors
+                queries_attempted.append(
+                    {
+                        "route": "/works",
+                        "query_type": "bibliographic",
+                        "query_bibliographic": bibliographic,
+                        "query_author": request.authors or "",
+                    }
+                )
                 response = self.http.get(
                     f"{self.config.base_url}/works", params=params
                 )
+            http_status = response.status_code
             stats.request_count = response.request_count
             stats.retries = response.retries
             stats.rate_limit_wait_seconds = response.rate_limit_wait_seconds
@@ -115,6 +130,8 @@ class CrossrefProvider:
                     query_type,
                     query_value,
                     stats=stats,
+                    http_status=http_status,
+                    queries_attempted=queries_attempted,
                 )
             elif response.status_code >= 400:
                 raise ProviderError(
@@ -133,6 +150,8 @@ class CrossrefProvider:
                             records=records,
                             errors=["crossref_identifier_mismatch"],
                             stats=stats,
+                            http_status=http_status,
+                            queries_attempted=queries_attempted,
                         )
                     records = exact
                 stats.records_returned = len(records)
@@ -143,6 +162,8 @@ class CrossrefProvider:
                     query_value,
                     records=records,
                     stats=stats,
+                    http_status=http_status,
+                    queries_attempted=queries_attempted,
                 )
         except NetworkError as exc:
             return ProviderResult(
@@ -152,8 +173,21 @@ class CrossrefProvider:
                 query_value,
                 errors=[str(exc)],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
-        except (ProviderError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
+        except ProviderError as exc:
+            return ProviderResult(
+                self.name,
+                ProviderStatus.FAILED,
+                query_type,
+                query_value,
+                errors=[str(exc)],
+                stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
+            )
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
             stats.parse_errors += 1
             return ProviderResult(
                 self.name,
@@ -162,6 +196,8 @@ class CrossrefProvider:
                 query_value,
                 errors=[f"Crossref response parse failed: {type(exc).__name__}"],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
 
         ttl = (
@@ -194,6 +230,7 @@ class CrossrefProvider:
                     str(request.year or "").strip(),
                     normalize_title(request.journal),
                     str(request.max_results),
+                    "crossref-title-v2",
                 )
             )
             return "bibliographic", request.title, normalized

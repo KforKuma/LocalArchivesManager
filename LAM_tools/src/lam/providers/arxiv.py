@@ -73,6 +73,8 @@ class ArxivProvider:
             return offline_result(self.name, query_type, query_value)
 
         stats = ProviderStats()
+        http_status: int | None = None
+        queries_attempted: list[dict[str, str]] = []
         try:
             params: dict[str, str] = {
                 "start": "0",
@@ -90,7 +92,14 @@ class ArxivProvider:
                         "sortOrder": "descending",
                     }
                 )
+            queries_attempted.append(
+                {
+                    "query_type": query_type,
+                    "query": params.get("id_list") or params.get("search_query") or "",
+                }
+            )
             response = self.http.get(self.config.base_url, params=params)
+            http_status = response.status_code
             self._add_http_stats(stats, response)
             if response.status_code >= 400:
                 raise ProviderError(f"arXiv returned HTTP {response.status_code}")
@@ -108,6 +117,8 @@ class ArxivProvider:
                 query_value,
                 records=records,
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
         except NetworkError as exc:
             return ProviderResult(
@@ -117,6 +128,8 @@ class ArxivProvider:
                 query_value,
                 errors=[str(exc)],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
         except (ProviderError, ET.ParseError, ValueError) as exc:
             stats.parse_errors += 1
@@ -127,6 +140,8 @@ class ArxivProvider:
                 query_value,
                 errors=[f"arXiv response parse failed: {type(exc).__name__}"],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
 
         ttl = (

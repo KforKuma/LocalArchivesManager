@@ -88,11 +88,14 @@ class UnpaywallProvider:
             )
 
         stats = ProviderStats()
+        http_status: int | None = None
+        queries_attempted = [{"query_type": "doi", "query": normalized}]
         try:
             response = self.http.get(
                 f"{self.config.base_url}/{quote(normalized, safe='')}",
                 params={"email": self.config.email},
             )
+            http_status = response.status_code
             stats.request_count = response.request_count
             stats.retries = response.retries
             stats.rate_limit_wait_seconds = response.rate_limit_wait_seconds
@@ -103,6 +106,8 @@ class UnpaywallProvider:
                     "doi",
                     query_value,
                     stats=stats,
+                    http_status=http_status,
+                    queries_attempted=queries_attempted,
                 )
             elif response.status_code >= 400:
                 raise ProviderError(f"Unpaywall returned HTTP {response.status_code}")
@@ -118,6 +123,8 @@ class UnpaywallProvider:
                     query_value,
                     records=[record],
                     stats=stats,
+                    http_status=http_status,
+                    queries_attempted=queries_attempted,
                 )
         except NetworkError as exc:
             return ProviderResult(
@@ -127,6 +134,8 @@ class UnpaywallProvider:
                 query_value,
                 errors=[str(exc)],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
         except (ProviderError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
             stats.parse_errors += 1
@@ -137,6 +146,8 @@ class UnpaywallProvider:
                 query_value,
                 errors=[f"Unpaywall response parse failed: {type(exc).__name__}"],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
 
         ttl = (

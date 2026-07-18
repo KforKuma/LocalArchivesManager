@@ -39,10 +39,15 @@ class MetadataMergeService:
         records = [record for result in results for record in result.records]
         if not records:
             statuses = {result.status for result in results}
-            if ProviderStatus.NOT_FOUND in statuses:
-                status = MetadataLookupStatus.NOT_FOUND
-            elif ProviderStatus.FAILED in statuses:
+            if ProviderStatus.FAILED in statuses:
                 status = MetadataLookupStatus.FAILED
+            elif statuses & {
+                ProviderStatus.UNAVAILABLE,
+                ProviderStatus.UNAVAILABLE_OFFLINE,
+            }:
+                status = MetadataLookupStatus.UNAVAILABLE
+            elif ProviderStatus.NOT_FOUND in statuses:
+                status = MetadataLookupStatus.NOT_FOUND
             else:
                 status = MetadataLookupStatus.UNAVAILABLE
             return MetadataLookupResult(
@@ -72,25 +77,41 @@ class MetadataMergeService:
             )
 
         groups = self._identity_groups(candidates)
+        candidate_evaluations: list[dict[str, object]] = []
         if request.title and not (request.doi or request.pmid or request.arxiv_id):
-            groups = self._title_groups(request, groups)
+            candidate_evaluations = self._title_candidate_evaluations(request, groups)
+            groups = [
+                group
+                for group, evaluation in zip(groups, candidate_evaluations)
+                if evaluation["accepted"]
+            ]
         if len(groups) != 1:
+            rejected = not groups and bool(candidate_evaluations)
             return self._blocked(
                 MetadataLookupStatus.AMBIGUOUS,
                 results,
                 candidates,
-                "Multiple provider identities remain plausible.",
+                (
+                    "Provider candidates were returned but none met the existing title and supporting-metadata rules."
+                    if rejected
+                    else "Multiple provider identities remain plausible."
+                ),
                 [
                     MetadataConflict(
                         "paper_identity",
                         {record.canonical_id: self._identity(record) for record in candidates},
                         (
-                            "crossref_query_ambiguous"
+                            "crossref_candidates_rejected"
+                            if rejected and any(result.provider == "crossref" for result in results)
+                            else "metadata_candidates_rejected"
+                            if rejected
+                            else "crossref_query_ambiguous"
                             if any(result.provider == "crossref" for result in results)
                             else "metadata_query_ambiguous"
                         ),
                     )
                 ],
+                candidate_evaluations,
             )
 
         group = groups[0]
@@ -117,6 +138,7 @@ class MetadataMergeService:
                 group,
                 "Reliable identifiers conflict across providers.",
                 conflicts,
+                candidate_evaluations,
             )
         merged = self._merge_group(group)
         type_result = merged.publication_type_result()
@@ -145,6 +167,7 @@ class MetadataMergeService:
             selection_reason=reason,
             conflicts_detail=conflicts,
             conflicts=[item.issue_key for item in conflicts],
+            candidate_evaluations=candidate_evaluations,
         )
 
     @staticmethod
@@ -218,23 +241,43 @@ class MetadataMergeService:
         request: MetadataLookupRequest,
         groups: list[list[MetadataRecord]],
     ) -> list[list[MetadataRecord]]:
+        evaluations = MetadataMergeService._title_candidate_evaluations(
+            request, groups
+        )
+        return [
+            group
+            for group, evaluation in zip(groups, evaluations)
+            if evaluation["accepted"]
+        ]
+
+    @staticmethod
+    def _title_candidate_evaluations(
+        request: MetadataLookupRequest,
+        groups: list[list[MetadataRecord]],
+    ) -> list[dict[str, object]]:
         query = normalize_title(request.title)
-        plausible = []
+        evaluations: list[dict[str, object]] = []
         for group in groups:
             score = max(tolerant_title_score(query, item.title) for item in group)
-            if score < 0.92:
-                continue
-            support_requested = bool(request.year or request.authors or request.journal)
-            support_matches = False
+            support_requested = [
+                name
+                for name, value in (
+                    ("year", request.year),
+                    ("author", request.authors),
+                    ("journal", request.journal),
+                )
+                if value
+            ]
+            support_matches: dict[str, bool] = {}
             if request.year and str(request.year).isdigit():
-                support_matches = support_matches or any(
+                support_matches["year"] = any(
                     item.year.isdigit()
                     and abs(int(item.year) - int(request.year)) <= 1
                     for item in group
                 )
             if request.authors:
                 query_author = MetadataMergeService._first_author(request.authors)
-                support_matches = support_matches or bool(
+                support_matches["author"] = bool(
                     query_author
                     and any(
                         MetadataMergeService._first_author("; ".join(item.authors))
@@ -244,16 +287,29 @@ class MetadataMergeService:
                     )
                 )
             if request.journal:
-                support_matches = support_matches or any(
+                support_matches["journal"] = any(
                     journals_equivalent(request.journal, item.journal)
                     or journals_equivalent(request.journal, item.journal_abbrev)
                     for item in group
                     if item.journal or item.journal_abbrev
                 )
-            if support_requested and not support_matches:
-                continue
-            plausible.append(group)
-        return plausible
+            rejection_reasons = []
+            if score < 0.92:
+                rejection_reasons.append("title_score_below_0.92")
+            if support_requested and not any(support_matches.values()):
+                rejection_reasons.append("supporting_metadata_mismatch")
+            evaluations.append(
+                {
+                    "canonical_ids": [item.canonical_id for item in group],
+                    "titles": [item.title for item in group],
+                    "title_score": round(score, 4),
+                    "support_requested": support_requested,
+                    "support_matches": support_matches,
+                    "accepted": not rejection_reasons,
+                    "rejection_reasons": rejection_reasons,
+                }
+            )
+        return evaluations
 
     @staticmethod
     def _identity_conflicts(group: list[MetadataRecord]) -> list[MetadataConflict]:
@@ -387,6 +443,7 @@ class MetadataMergeService:
         records: list[MetadataRecord],
         reason: str,
         conflicts: list[MetadataConflict],
+        candidate_evaluations: list[dict[str, object]] | None = None,
     ) -> MetadataLookupResult:
         return MetadataLookupResult(
             status=status,
@@ -397,6 +454,7 @@ class MetadataMergeService:
             selection_reason=reason,
             conflicts=[item.issue_key for item in conflicts],
             conflicts_detail=conflicts,
+            candidate_evaluations=list(candidate_evaluations or []),
         )
 
     @staticmethod

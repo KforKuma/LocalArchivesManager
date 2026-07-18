@@ -30,6 +30,7 @@ from ..models import (
     TitleCandidate,
     VisualPdfInspection,
 )
+from ..runtime_resources import runtime_layout, verify_asset_manifest
 from ..utils.candidate_cleaning import merge_title_blocks
 from ..utils.identifiers import (
     extract_doi_candidates,
@@ -78,7 +79,16 @@ class OcrService:
         pdf2image_available = importlib.util.find_spec("pdf2image") is not None
         easyocr_installed = importlib.util.find_spec("easyocr") is not None
         torch_available = importlib.util.find_spec("torch") is not None
+        layout = runtime_layout()
         poppler = self._poppler_executable()
+        poppler_probes = self._poppler_diagnostics(poppler, execute=deep)
+        poppler_integrity: dict[str, Any] | None = None
+        if deep and layout.is_frozen and layout.bundle_root is not None:
+            poppler_root = layout.bundle_root / "vendor" / "poppler"
+            poppler_integrity = verify_asset_manifest(
+                poppler_root,
+                poppler_root / "manifest.json",
+            )
         easyocr_available = easyocr_installed
         if pdf2image_available and poppler is not None and easyocr_installed:
             easyocr_available = self._probe_easyocr_import()
@@ -91,24 +101,53 @@ class OcrService:
             except Exception:
                 pass
         temporary_writable = self._temporary_directory_writable()
+        model_available: bool | None = None
+        model_integrity: dict[str, Any] | None = None
+        if deep and layout.is_frozen:
+            model_integrity = verify_asset_manifest(self.config.model_storage_dir)
+            model_available = bool(model_integrity["ok"])
         status = "available"
         if not pdf2image_available:
             status = "ocr_unavailable_pdf2image"
         elif poppler is None:
             status = "ocr_unavailable_poppler"
+        elif layout.is_frozen and deep and not all(
+            item.get("execution_ok") for item in poppler_probes.values()
+        ):
+            status = "ocr_unavailable_poppler_execution"
+        elif layout.is_frozen and deep and not bool(
+            poppler_integrity and poppler_integrity["ok"]
+        ):
+            status = "ocr_unavailable_poppler_integrity"
         elif not easyocr_available:
             status = "ocr_unavailable_easyocr"
         elif not temporary_writable:
             status = "ocr_temporary_directory_unwritable"
-        model_available: bool | None = None
+        elif layout.is_frozen and deep and not model_available:
+            errors = (model_integrity or {}).get("errors", [])
+            status = (
+                "ocr_unavailable_model_missing"
+                if any("missing" in str(item) for item in errors)
+                else "ocr_unavailable_model_integrity"
+            )
         details: dict[str, Any] = {
+            "is_frozen": layout.is_frozen,
+            "bundle_root": str(layout.bundle_root) if layout.bundle_root else None,
+            "languages": list(self.config.languages),
             "poppler_executable": str(poppler) if poppler else None,
+            "poppler_path": (
+                str(self.config.poppler_path) if self.config.poppler_path else None
+            ),
+            "poppler_executables": poppler_probes,
+            "poppler_integrity": poppler_integrity,
             "model_storage_dir": (
                 str(self.config.model_storage_dir) if self.config.model_storage_dir else None
             ),
-            "download_enabled": bool(initialize_models),
-            "uses_network": bool(initialize_models),
-            "may_download_models": bool(initialize_models),
+            "model_integrity": model_integrity,
+            "download_enabled": bool(self.config.download_enabled),
+            "model_download_disabled": not self.config.download_enabled,
+            "uses_network": bool(initialize_models and not layout.is_frozen),
+            "may_download_models": bool(initialize_models and not layout.is_frozen),
             "easyocr_installed": easyocr_installed,
             "easyocr_import_probe": easyocr_available,
         }
@@ -116,13 +155,14 @@ class OcrService:
             # A default doctor run is a dependency probe only. Constructing an
             # EasyOCR Reader can create or alter its model directory even when
             # downloads are disabled, so model initialization is explicit.
-            model_available = None
+            if not layout.is_frozen:
+                model_available = None
             details["reader_initialization"] = "skipped_no_model_side_effects"
         elif deep and status == "available":
             try:
                 safe_config = replace(
                     self.config,
-                    download_enabled=True,
+                    download_enabled=not layout.is_frozen,
                 )
                 _, mode = self._get_reader(safe_config)
                 model_available = True
@@ -137,7 +177,14 @@ class OcrService:
         return OcrAvailability(
             available=status == "available",
             pdf2image_available=pdf2image_available,
-            poppler_available=poppler is not None,
+            poppler_available=(
+                poppler is not None
+                and (
+                    not layout.is_frozen
+                    or not deep
+                    or all(item.get("execution_ok") for item in poppler_probes.values())
+                )
+            ),
             easyocr_available=easyocr_available,
             model_available=model_available,
             torch_available=torch_available,
@@ -912,6 +959,52 @@ class OcrService:
             return None
         found = shutil.which("pdftoppm") or shutil.which("pdftocairo")
         return Path(found) if found else None
+
+    def _poppler_diagnostics(
+        self,
+        primary: Path | None,
+        *,
+        execute: bool,
+    ) -> dict[str, dict[str, Any]]:
+        directory = primary.parent if primary is not None else self.config.poppler_path
+        diagnostics: dict[str, dict[str, Any]] = {}
+        for stem in ("pdftoppm", "pdftocairo"):
+            candidate: Path | None = None
+            if directory is not None:
+                for name in (f"{stem}.exe", stem):
+                    path = directory / name
+                    if path.is_file():
+                        candidate = path
+                        break
+            if candidate is None:
+                found = shutil.which(stem)
+                if found:
+                    candidate = Path(found)
+            item: dict[str, Any] = {
+                "path": str(candidate) if candidate else None,
+                "present": bool(candidate and candidate.is_file()),
+                "execution_ok": None,
+                "returncode": None,
+            }
+            if execute and candidate is not None:
+                creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                try:
+                    completed = subprocess.run(
+                        [str(candidate), "-v"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=min(15.0, self.config.timeout_seconds),
+                        check=False,
+                        creationflags=creation_flags,
+                    )
+                    item["returncode"] = completed.returncode
+                    item["execution_ok"] = completed.returncode == 0
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    item["execution_ok"] = False
+                    item["error"] = type(exc).__name__
+            diagnostics[stem] = item
+        return diagnostics
 
     def _temporary_directory_writable(self) -> bool:
         root = self.settings.download_temp_dir or self.settings.state_dir / "tmp"

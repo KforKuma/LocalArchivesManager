@@ -778,6 +778,8 @@ class ProviderResult:
     errors: list[str] = field(default_factory=list)
     stats: ProviderStats = field(default_factory=ProviderStats)
     cache_hit: bool = False
+    http_status: int | None = None
+    queries_attempted: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -789,6 +791,8 @@ class ProviderResult:
             "errors": self.errors,
             "stats": asdict(self.stats),
             "cache_hit": self.cache_hit,
+            "http_status": self.http_status,
+            "queries_attempted": self.queries_attempted,
         }
 
 
@@ -804,6 +808,7 @@ class MetadataLookupResult:
     provider_results: list[ProviderResult] = field(default_factory=list)
     selection_reason: str = ""
     conflicts_detail: list[MetadataConflict] = field(default_factory=list)
+    candidate_evaluations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

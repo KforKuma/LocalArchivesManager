@@ -81,24 +81,37 @@ class PubMedProvider:
         stats = ProviderStats()
         raw = b""
         http_status: int | None = None
+        queries_attempted: list[dict[str, str]] = []
         try:
             if query_type == "pmid":
+                queries_attempted.append(
+                    {"operation": "efetch", "query_type": "pmid", "query": normalized}
+                )
                 fetch = self._efetch([normalized])
                 self._add_http_stats(stats, fetch)
                 raw, http_status = fetch.content, fetch.status_code
                 self._require_success(fetch, "EFetch")
                 records, parse_errors = self.parse_pubmed_xml(fetch.content)
             else:
-                term = (
-                    f'"{normalized}"[AID]'
+                terms = (
+                    [f'"{normalized}"[AID]']
                     if query_type == "doi"
-                    else f'"{query_value.strip()}"[Title]'
+                    else self._title_search_terms(query_value)
                 )
-                search = self._esearch(term, request.max_results)
-                self._add_http_stats(stats, search)
-                http_status = search.status_code
-                self._require_success(search, "ESearch")
-                ids = self._parse_esearch(search.content)
+                ids: list[str] = []
+                search = None
+                for term in terms:
+                    queries_attempted.append(
+                        {"operation": "esearch", "query_type": query_type, "term": term}
+                    )
+                    search = self._esearch(term, request.max_results)
+                    self._add_http_stats(stats, search)
+                    http_status = search.status_code
+                    self._require_success(search, "ESearch")
+                    ids = self._parse_esearch(search.content)
+                    if ids:
+                        break
+                assert search is not None
                 if not ids:
                     result = ProviderResult(
                         self.name,
@@ -106,6 +119,8 @@ class PubMedProvider:
                         query_type,
                         query_value,
                         stats=stats,
+                        http_status=http_status,
+                        queries_attempted=queries_attempted,
                     )
                     cache_provider_result(
                         self.cache,
@@ -118,6 +133,9 @@ class PubMedProvider:
                     )
                     return result
                 fetch = self._efetch(ids)
+                queries_attempted.append(
+                    {"operation": "efetch", "query_type": "pmid_batch", "query": ",".join(ids)}
+                )
                 self._add_http_stats(stats, fetch)
                 raw, http_status = fetch.content, fetch.status_code
                 self._require_success(fetch, "EFetch")
@@ -139,6 +157,8 @@ class PubMedProvider:
                 records=records,
                 errors=parse_errors,
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
         except NetworkError as exc:
             return ProviderResult(
@@ -148,6 +168,8 @@ class PubMedProvider:
                 query_value,
                 errors=[str(exc)],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
         except (ProviderError, ET.ParseError, json.JSONDecodeError, KeyError, ValueError) as exc:
             stats.parse_errors += 1
@@ -158,6 +180,8 @@ class PubMedProvider:
                 query_value,
                 errors=[f"PubMed response parse failed: {type(exc).__name__}"],
                 stats=stats,
+                http_status=http_status,
+                queries_attempted=queries_attempted,
             )
 
         ttl = (
@@ -234,10 +258,27 @@ class PubMedProvider:
                     normalize_title(request.authors),
                     str(request.year or "").strip(),
                     str(request.max_results),
+                    "pubmed-title-v2",
                 )
             )
             return "title", request.title, context
         return "unknown", "", ""
+
+    @staticmethod
+    def _title_search_terms(title: str) -> list[str]:
+        exact = re.sub(r"\s+", " ", str(title or "")).strip()
+        terms = [f'"{exact}"[Title]'] if exact else []
+        stopwords = {"and", "for", "from", "into", "the", "with", "current"}
+        words = [
+            word
+            for word in re.findall(r"[a-z0-9]+", normalize_title(exact))
+            if len(word) > 2 and word not in stopwords
+        ]
+        words = list(dict.fromkeys(words))
+        fallback = " AND ".join(f'"{word}"[Title]' for word in words)
+        if fallback and fallback not in terms:
+            terms.append(fallback)
+        return terms
 
     def _common_params(self) -> dict[str, str]:
         params = {"db": "pubmed", "tool": self.config.tool, "email": self.config.email}

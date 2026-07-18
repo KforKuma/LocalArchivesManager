@@ -10,6 +10,7 @@ from typing import Any
 from ..config import Settings
 from ..models import (
     MetadataLookupRequest,
+    MetadataLookupResult,
     MetadataLookupStatus,
     MetadataRecord,
     ReferenceBatch,
@@ -128,6 +129,7 @@ class ReferenceTextImportWorkflow:
                 for item in previous.get("resolutions", [])
             }
             resolutions: list[ReferenceResolution] = []
+            resolution_diagnostics: list[dict[str, Any]] = []
             for candidate in batch.candidates:
                 operation_id = f"{batch.sha256}:{candidate.reference_index}"
                 prior = previous_by_key.get(candidate.stable_key())
@@ -139,6 +141,7 @@ class ReferenceTextImportWorkflow:
                         provider_status="receipt",
                     )
                     resolutions.append(resolution)
+                    resolution_diagnostics.append({})
                     result.skipped.append(
                         {
                             "file": source.name,
@@ -147,7 +150,7 @@ class ReferenceTextImportWorkflow:
                         }
                     )
                     continue
-                resolution, metadata, record = self._resolve_candidate(
+                resolution, metadata, record, diagnostics = self._resolve_candidate(
                     catalogue,
                     candidate,
                     seen_batch_identities,
@@ -156,6 +159,7 @@ class ReferenceTextImportWorkflow:
                     cache_write=cache_write,
                 )
                 resolutions.append(resolution)
+                resolution_diagnostics.append(diagnostics)
                 if journal:
                     journal.set_operation_state(
                         None,
@@ -250,6 +254,11 @@ class ReferenceTextImportWorkflow:
                         {
                             **asdict(item),
                             "candidate_key": batch.candidates[index].stable_key(),
+                            **(
+                                resolution_diagnostics[index]
+                                if item.status in UNRESOLVED_REFERENCE_STATES
+                                else {}
+                            ),
                         }
                         for index, item in enumerate(resolutions)
                     ],
@@ -370,10 +379,25 @@ class ReferenceTextImportWorkflow:
         offline: bool,
         refresh: bool,
         cache_write: bool,
-    ) -> tuple[ReferenceResolution, MetadataRecord | None, Any | None]:
+    ) -> tuple[
+        ReferenceResolution,
+        MetadataRecord | None,
+        Any | None,
+        dict[str, Any],
+    ]:
         request = self._request(candidate, offline, refresh, cache_write)
         if request is None:
-            return ReferenceResolution(candidate.reference_index, "invalid_reference"), None, None
+            return (
+                ReferenceResolution(candidate.reference_index, "invalid_reference"),
+                None,
+                None,
+                self._resolution_diagnostics(
+                    candidate,
+                    None,
+                    None,
+                    "No identifier or usable parsed title was available.",
+                ),
+            )
         lookup = self.metadata_service.lookup(request)
         if lookup.status != MetadataLookupStatus.FOUND or not lookup.best_record:
             status = {
@@ -381,28 +405,48 @@ class ReferenceTextImportWorkflow:
                 MetadataLookupStatus.CONFLICT: "identifier_conflict",
                 MetadataLookupStatus.NOT_FOUND: "not_found",
             }.get(lookup.status, "provider_failed")
-            return (
-                ReferenceResolution(
+            resolution = ReferenceResolution(
                     candidate.reference_index,
                     status,
                     provider_status=lookup.status.value,
                     issue=(lookup.conflicts[0] if lookup.conflicts else status),
+                )
+            return (
+                resolution,
+                None,
+                None,
+                self._resolution_diagnostics(
+                    candidate,
+                    request,
+                    lookup,
+                    lookup.selection_reason or resolution.issue or status,
                 ),
-                None,
-                None,
             )
         if lookup.confidence not in {"exact_identifier", "exact_title_supported"}:
-            return (
-                ReferenceResolution(
+            resolution = ReferenceResolution(
                     candidate.reference_index,
                     "ambiguous",
                     provider_status=lookup.status.value,
                     issue="reference_match_lacks_support",
+                )
+            return (
+                resolution,
+                None,
+                None,
+                self._resolution_diagnostics(
+                    candidate,
+                    request,
+                    lookup,
+                    lookup.selection_reason or resolution.issue,
                 ),
-                None,
-                None,
             )
         metadata = MetadataRecord.from_dict(lookup.best_record)
+        diagnostics = self._resolution_diagnostics(
+            candidate,
+            request,
+            lookup,
+            lookup.selection_reason or "Provider candidate met the identity rules.",
+        )
         identity = self._identity_key(metadata, candidate)
         if identity in seen_batch:
             return (
@@ -414,6 +458,7 @@ class ReferenceTextImportWorkflow:
                 ),
                 metadata,
                 None,
+                diagnostics,
             )
         matches = self._existing_matches(catalogue, metadata)
         if len(matches) > 1:
@@ -426,6 +471,10 @@ class ReferenceTextImportWorkflow:
                 ),
                 metadata,
                 None,
+                {
+                    **diagnostics,
+                    "final_resolution_reason": "Provider metadata matched multiple Catalogue rows.",
+                },
             )
         if matches:
             record = matches[0]
@@ -441,6 +490,7 @@ class ReferenceTextImportWorkflow:
                 ),
                 metadata,
                 record,
+                diagnostics,
             )
         values = self._new_values(metadata)
         record = catalogue.add_record(values)
@@ -455,7 +505,106 @@ class ReferenceTextImportWorkflow:
             ),
             metadata,
             record,
+            diagnostics,
         )
+
+    @staticmethod
+    def _resolution_diagnostics(
+        candidate: ReferenceCandidate,
+        request: MetadataLookupRequest | None,
+        lookup: MetadataLookupResult | None,
+        final_reason: str,
+    ) -> dict[str, Any]:
+        provider_results = list(lookup.provider_results) if lookup else []
+        queries_attempted: list[dict[str, Any]] = []
+        top_candidates: list[dict[str, Any]] = []
+        provider_http_status: list[dict[str, Any]] = []
+        for provider_result in provider_results:
+            attempts = provider_result.queries_attempted or [
+                {
+                    "query_type": provider_result.query_type,
+                    "query": provider_result.query_value,
+                }
+            ]
+            for attempt in attempts:
+                queries_attempted.append(
+                    {
+                        "provider": provider_result.provider,
+                        **attempt,
+                        "provider_status": provider_result.status.value,
+                        "cache_hit": provider_result.cache_hit,
+                        "http_status": provider_result.http_status,
+                        "provider_results_count": len(provider_result.records),
+                    }
+                )
+            provider_http_status.append(
+                {
+                    "provider": provider_result.provider,
+                    "status": provider_result.status.value,
+                    "http_status": provider_result.http_status,
+                }
+            )
+            for record in provider_result.records[:5]:
+                top_candidates.append(
+                    {
+                        "provider": provider_result.provider,
+                        "canonical_id": record.canonical_id,
+                        "title": record.title,
+                        "authors": record.authors[:3],
+                        "year": record.year,
+                        "journal": record.journal,
+                        "doi": record.doi,
+                        "pmid": record.pmid,
+                        "arxiv_id": record.arxiv_id,
+                    }
+                )
+        evaluations = list(lookup.candidate_evaluations) if lookup else []
+        rejection_reasons = list(
+            dict.fromkeys(
+                reason
+                for evaluation in evaluations
+                for reason in evaluation.get("rejection_reasons", [])
+            )
+        )
+        strategy = "invalid_reference"
+        if request is not None:
+            if request.pmid:
+                strategy = "pmid_exact"
+            elif request.doi:
+                strategy = "doi_exact"
+            elif request.arxiv_id:
+                strategy = "arxiv_exact"
+            else:
+                strategy = "title_bibliographic"
+            if strategy != "title_bibliographic" and any(
+                item.query_type in {"bibliographic", "title"}
+                for item in provider_results
+            ):
+                strategy += "_then_title_fallback"
+        return {
+            "raw_text": candidate.raw_text,
+            "normalized_text": candidate.normalized_text,
+            "parsed_title": request.title if request else "",
+            "parsed_authors": list(candidate.author_candidates),
+            "parsed_year": request.year if request else "",
+            "parsed_journal": request.journal if request else "",
+            "extracted_identifiers": {
+                "doi": list(candidate.doi_candidates),
+                "pmid": list(candidate.pmid_candidates),
+                "arxiv_id": list(candidate.arxiv_candidates),
+            },
+            "strategy_selected": strategy,
+            "queries_attempted": queries_attempted,
+            "cache_hit": any(item.cache_hit for item in provider_results),
+            "provider_http_status": provider_http_status,
+            "provider_results_count": sum(
+                len(item.records) for item in provider_results
+            ),
+            "top_candidates": top_candidates[:10],
+            "candidate_scores": evaluations,
+            "candidate_rejection_reasons": rejection_reasons,
+            "final_resolution_reason": final_reason,
+        }
 
     @staticmethod
     def _request(

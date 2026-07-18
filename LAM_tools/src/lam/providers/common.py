@@ -30,6 +30,8 @@ def provider_result_from_cache(
         errors=list(parsed.get("errors", [])),
         stats=ProviderStats(cache_hits=1, records_returned=len(parsed.get("records", []))),
         cache_hit=True,
+        http_status=payload.get("http_status"),
+        queries_attempted=list(parsed.get("queries_attempted", [])),
     )
 
 
@@ -57,6 +59,7 @@ def cache_provider_result(
             "status": result.status.value,
             "records": [record.to_dict() for record in result.records],
             "errors": result.errors,
+            "queries_attempted": result.queries_attempted,
         },
         ttl_seconds=ttl_seconds,
         http_status=http_status,

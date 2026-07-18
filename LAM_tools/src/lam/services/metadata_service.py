@@ -59,6 +59,43 @@ class CompositeMetadataLookupService:
             for name in names
             if name in self.providers
         )
+        if (
+            request.provider == "auto"
+            and request.title
+            and (request.pmid or request.doi or request.arxiv_id)
+        ):
+            exact = self.merge_service.merge(request, results)
+            if not exact.records and exact.status.value in {
+                "not_found",
+                "failed",
+                "unavailable",
+            }:
+                fallback_request = replace(
+                    request,
+                    pmid=None,
+                    doi=None,
+                    arxiv_id=None,
+                    candidate_source=(
+                        f"{request.candidate_source or 'metadata'}_title_fallback"
+                    ),
+                )
+                fallback = self.lookup(fallback_request)
+                combined = [*results, *fallback.provider_results]
+                if fallback.records:
+                    fallback.provider_results = combined
+                    fallback.selection_reason = (
+                        "Exact identifier lookup returned no record; "
+                        + fallback.selection_reason
+                    )
+                    return fallback
+                merged_fallback = self.merge_service.merge(
+                    fallback_request, combined
+                )
+                merged_fallback.selection_reason = (
+                    "Exact identifier lookup returned no record; "
+                    + merged_fallback.selection_reason
+                )
+                return merged_fallback
         if request.provider == "auto":
             discovered_doi = next(
                 (
