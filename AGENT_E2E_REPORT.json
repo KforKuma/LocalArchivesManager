@@ -1,0 +1,145 @@
+{
+  "schema_version": "1",
+  "product_version": "0.6.1",
+  "date": "2026-07-18",
+  "executable": "D:\\LAM_build\\release\\LAM-0.6.1-windows-x64\\lam.exe",
+  "library_root": "D:\\LAM_build\\agent-test-library",
+  "overall_result": "partial_with_agent_protocol_deviation",
+  "scope": {
+    "only_allowed_library_root_honored": true,
+    "real_library_catalogue_accessed": false,
+    "real_library_managed_directories_accessed": false,
+    "repository_reads": [
+      "AGENTS.md",
+      "Workflows.md",
+      "LAM_tools/examples/test_corpus public fixtures and manifest"
+    ],
+    "non_cli_setup_actions": [
+      "copied synthetic native_text.pdf into test Inbox",
+      "copied synthetic image_only.pdf as 000_image_only.pdf into test Inbox",
+      "copied public refs1.txt into test Inbox"
+    ]
+  },
+  "instruction_review": {
+    "agents_md_reviewed": true,
+    "workflows_md_reviewed": true,
+    "sufficient_for_safety": true,
+    "sufficient_for_full_automation": false
+  },
+  "invocation_audit": {
+    "count": 18,
+    "all_caller_agent": true,
+    "old_or_deprecated_commands_used": false,
+    "hidden_aliases_used": false,
+    "direct_catalogue_or_documents_edit": false,
+    "direct_managed_file_move_rename_delete": false
+  },
+  "commands": [
+    {"index": 1, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json init --dry-run", "status": "success", "exit_code": 0, "applied": false},
+    {"index": 2, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json init --apply", "status": "success", "exit_code": 0, "applied": true},
+    {"index": 3, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json commands", "status": "success", "exit_code": 0, "applied": false},
+    {"index": 4, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json check --dry-run", "status": "no_changes", "exit_code": 3, "applied": false},
+    {"index": 5, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json check", "status": "no_changes", "exit_code": 3, "applied": true},
+    {"index": 6, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json commands", "status": "success", "exit_code": 0, "applied": false},
+    {"index": 7, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json register --dry-run --offline --no-cache-write --ocr auto --max-files 1", "status": "needs_review", "exit_code": 2, "applied": false},
+    {"index": 8, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json register --dry-run --offline --no-cache-write --ocr always --max-files 1", "status": "needs_review", "exit_code": 2, "applied": false},
+    {"index": 9, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json register --dry-run --reference-text only --reference-file D:\\LAM_build\\agent-test-library\\Inbox\\refs1.txt --max-references 6 --no-cache-write", "status": "needs_review", "exit_code": 2, "applied": false},
+    {"index": 10, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json file --dry-run", "status": "no_changes", "exit_code": 3, "applied": false},
+    {"index": 11, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json file", "status": "needs_review", "exit_code": 2, "applied": true, "business_changes": 0},
+    {"index": 12, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json export zotero --all --dry-run --offline --no-cache-write", "status": "needs_review", "exit_code": 2, "applied": false},
+    {"index": 13, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json review --all --dry-run", "status": "no_changes", "exit_code": 3, "applied": false},
+    {"index": 14, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json cleanup --dry-run", "status": "no_changes", "exit_code": 3, "applied": false},
+    {"index": 15, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json cleanup --apply", "status": "no_changes", "exit_code": 3, "applied": true, "deleted_files": 0},
+    {"index": 16, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json check --dry-run", "status": "needs_review", "exit_code": 2, "applied": false},
+    {"index": 17, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json check", "status": "needs_review", "exit_code": 2, "applied": true, "protocol_deviation": true, "business_changes": 0},
+    {"index": 18, "args": "--root D:\\LAM_build\\agent-test-library --caller agent --json status library", "status": "no_changes", "exit_code": 3, "applied": false}
+  ],
+  "scenario_results": {
+    "init": "completed",
+    "commands_json": "completed",
+    "initial_check": "completed",
+    "native_pdf_register": "dry_run_needs_review_apply_stopped",
+    "image_only_register": "ocr_dry_run_needs_review_apply_stopped",
+    "reference_text_register": {
+      "result": "dry_run_needs_review_apply_stopped",
+      "reference_files": 1,
+      "references": 6,
+      "planned_registered_new": 5,
+      "unresolved": 1,
+      "network_used": true,
+      "provider_cache_write": false
+    },
+    "topic_folder_assignment": "blocked_no_public_agent_cli_and_direct_edit_forbidden",
+    "file": "executed_no_files_moved",
+    "zotero_export": "dry_run_empty_selection_apply_stopped",
+    "review_dry_run": "completed_no_changes",
+    "cleanup": "completed_no_changes",
+    "final_check": "needs_review_two_unmatched_pdfs_with_protocol_deviation"
+  },
+  "final_state": {
+    "initialized": true,
+    "schema_version": "0.6.1",
+    "catalogue_rows": 0,
+    "document_rows": 0,
+    "inbox_pdfs": 2,
+    "inbox_reference_files": 1,
+    "registered_files": 0,
+    "topics_files": 0,
+    "export_files": 0,
+    "cleanup_deleted_files": 0,
+    "temporary_artifacts": 0
+  },
+  "agent_protocol_deviations": [
+    {
+      "severity": "high",
+      "invocation_index": 17,
+      "rule_source": "AGENTS.md:22-24",
+      "issue": "check was applied after the same dry-run returned needs_review",
+      "business_state_modified": false,
+      "runtime_artifacts_written": true
+    }
+  ],
+  "documentation_findings": [
+    {
+      "severity": "high",
+      "sources": ["AGENTS.md:18-24"],
+      "issue": "final check needs_review must be treated as terminal by the Agent",
+      "proposed_correction": "add an explicit operational checklist item forbidding a following check/apply"
+    },
+    {
+      "severity": "high",
+      "sources": ["AGENTS.md:123-130", "Workflows.md:878-891", "Workflows.md:1125"],
+      "issue": "no public Agent CLI can set user-controlled topic_folder",
+      "proposed_correction": "explicitly require user workbook edit and confirmation before Agent file dry-run"
+    },
+    {
+      "severity": "medium",
+      "sources": ["Workflows.md:174", "register command registry"],
+      "issue": "continue-unrelated guidance conflicts with absence of a per-PDF register selector",
+      "proposed_correction": "document selection order and the inability to independently target an unrelated PDF"
+    },
+    {
+      "severity": "medium",
+      "sources": ["Workflows.md:1428-1429"],
+      "issue": "file dry-run no_changes did not predict apply final-check needs_review",
+      "proposed_correction": "document possible final-check status elevation or expose equivalent assessment in preview"
+    },
+    {
+      "severity": "low",
+      "sources": ["Workflows.md:177-179", "Workflows.md:1357-1362"],
+      "issue": "init dry-run creates sanitized invocation state at an absent root",
+      "proposed_correction": "add an init-specific runtime-artifact note"
+    },
+    {
+      "severity": "low",
+      "sources": ["Workflows.md:930-932", "Workflows.md:1506-1511"],
+      "issue": "copyable examples omit root and/or caller agent",
+      "proposed_correction": "provide Agent-safe examples or label them user-shell shorthand"
+    }
+  ],
+  "release_assessment": {
+    "safety_boundary_held": true,
+    "full_business_e2e_completed": false,
+    "clean_agent_e2e_pass": false
+  }
+}

@@ -1,0 +1,4 @@
+1. A deterministic reference import study.
+2. A deterministic reference import study. 2024.
+3. Smith J, Doe A. A deterministic reference import study. Journal of Test Systems. 2024;12(3):101-110.
+4. Smith J, Doe A. A deterministic reference import study. Journal of Test Systems. 2024;12(3):101-110. doi:10.1234/ref.one

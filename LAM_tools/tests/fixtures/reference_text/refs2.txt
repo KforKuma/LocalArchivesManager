@@ -1,0 +1,6 @@
+1) Wang Q, Li M.
+“Recovering a dirty multi-line reference title from copied text.”
+Reference Processing Quarterly. 2022;5(1):1-9.
+
+2) Garcia P, Jones T. [Conservative matching for references without identifiers].
+Library Automation Review. 2021;7(4):44-52.

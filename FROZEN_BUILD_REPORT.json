@@ -1,0 +1,154 @@
+{
+  "schema_version": "1",
+  "product": "LAM",
+  "version": "0.6.1",
+  "build_date": "2026-07-18",
+  "target": {
+    "platform": "windows-x64",
+    "format": "pyinstaller-onedir",
+    "console": true
+  },
+  "decision": {
+    "technical_release_candidate": true,
+    "publish_ready": false,
+    "published": false,
+    "gates": [
+      "clean_source_commit_or_tag",
+      "third_party_license_review",
+      "second_clean_windows_machine_smoke"
+    ]
+  },
+  "environment": {
+    "os": "Windows 11 10.0.26200",
+    "python": "3.14.6",
+    "environment_type": "conda",
+    "environment_name": "lam_agent",
+    "pyinstaller": "6.21.0",
+    "pyinstaller_hooks_contrib": "2026.6",
+    "easyocr": "1.7.2",
+    "torch": "2.13.0",
+    "torchvision": "0.28.0",
+    "poppler": "26.07.0",
+    "source_state": "dirty_working_tree"
+  },
+  "paths": {
+    "build_output": "D:\\LAM_build\\dist\\LAM-0.6.1",
+    "release_staging": "D:\\LAM_build\\release\\LAM-0.6.1-windows-x64",
+    "smoke_root": "D:\\LAM_build\\smoke",
+    "build_log": "D:\\LAM_build\\logs\\build-background.stderr.log",
+    "build_stdout": "D:\\LAM_build\\logs\\build-background.stdout.log",
+    "pyinstaller_warnings": "D:\\LAM_build\\work\\pyinstaller\\lam\\warn-lam.txt",
+    "smoke_report": "D:\\LAM_build\\reports\\frozen-smoke.json"
+  },
+  "resources": {
+    "easyocr": {
+      "manifest": "LAM_tools/packaging/manifests/easyocr-models.json",
+      "version": "1.7.2",
+      "languages": ["en"],
+      "download_enabled": false,
+      "git_tracked_assets": false,
+      "files_checked": 2,
+      "integrity_ok": true,
+      "models": [
+        {
+          "filename": "craft_mlt_25k.pth",
+          "size_bytes": 83152330,
+          "sha256": "4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17"
+        },
+        {
+          "filename": "english_g2.pth",
+          "size_bytes": 15143997,
+          "sha256": "e2272681d9d67a04e2dff396b6e95077bc19001f8f6d3593c307b9852e1c29e8"
+        }
+      ]
+    },
+    "poppler": {
+      "manifest": "LAM_tools/packaging/manifests/poppler-windows.json",
+      "version": "26.07.0",
+      "license": "GPL-2.0-or-later",
+      "git_tracked_assets": false,
+      "package_records": 41,
+      "files_checked": 195,
+      "integrity_ok": true,
+      "pdftoppm_execution_ok": true,
+      "pdftocairo_execution_ok": true
+    }
+  },
+  "frozen_runtime": {
+    "is_frozen": true,
+    "easyocr_import": true,
+    "model_integrity": true,
+    "model_download_disabled": true,
+    "model_path_in_bundle": true,
+    "poppler_path_in_bundle": true,
+    "package_templates_present": true,
+    "runtime_paths_writable": true,
+    "user_easyocr_cache_files_created": false,
+    "models_mutated": false,
+    "network_download_observed": false
+  },
+  "release_tree": {
+    "verification_ok": true,
+    "file_count": 7303,
+    "size_bytes": 999412913,
+    "forbidden_content_found": false
+  },
+  "tests": {
+    "source_pytest": {
+      "passed": 480,
+      "deselected": 4,
+      "failed": 0
+    },
+    "packaging_focused": {
+      "passed": 49,
+      "failed": 0
+    },
+    "frozen_smoke": {
+      "passed": 27,
+      "failed": 0,
+      "duration_seconds": 85,
+      "doctor_exit_code": 0,
+      "image_only_ocr_status": "success",
+      "screenshot_wrapped_ocr_status": "success",
+      "reference_files": 2,
+      "offline_references_parsed": 6,
+      "no_identifier_references": 4,
+      "no_identifier_registered_new": 4,
+      "no_identifier_unresolved": 0,
+      "all_agent_calls_used_caller_agent": true,
+      "modifying_commands_dry_run_first": true,
+      "zotero_apply_skipped_after_needs_review": true
+    }
+  },
+  "pyinstaller_warning_classification": [
+    {
+      "pattern": "conda __win dependency missing",
+      "severity": "informational",
+      "classification": "benign_environment_metadata"
+    },
+    {
+      "pattern": "optional TensorBoard imports",
+      "severity": "informational",
+      "classification": "unused_optional_dependency"
+    },
+    {
+      "pattern": "POSIX and Java modules",
+      "severity": "informational",
+      "classification": "optional_cross_platform_imports"
+    },
+    {
+      "pattern": "broad optional transformers, tests, and helper modules",
+      "severity": "informational",
+      "classification": "upstream_dependency_surface"
+    }
+  ],
+  "unresolved_risks": [
+    "release tree is approximately 953.1 MiB and can be optimized only after evidence-driven frozen retesting",
+    "Poppler GPL-2.0-or-later and dependency redistribution obligations require final license review",
+    "exact EasyOCR model-weight redistribution provenance requires confirmation",
+    "a no-identifier citation containing Clin Sci (London Engl 1979) (2015) is conservatively rejected because the parser selects 1979 as the year",
+    "pure title-only input without author, year, or journal support remains ambiguous by design",
+    "the build came from a dirty working tree and must be reproduced from a clean commit or tag",
+    "second clean Windows x64 machine smoke test remains pending"
+  ]
+}

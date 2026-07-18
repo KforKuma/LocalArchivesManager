@@ -1,0 +1,25 @@
+include README.md CHANGELOG.md LICENSE AGENTS.md Workflows.md pyproject.toml
+include LAM_tools/README.md LAM_tools/LICENSE LAM_tools/THIRD_PARTY_NOTICES.md LAM_tools/pyproject.toml
+include LAM_tools/environment.yml LAM_tools/.env.example LAM_tools/MANIFEST.in
+recursive-include LAM_tools/docs *.md
+include LAM_tools/examples/test_corpus/README.md
+include LAM_tools/examples/test_corpus/manifest.json
+include LAM_tools/examples/test_corpus/manifest.schema.json
+recursive-include LAM_tools/examples/test_corpus/included *.pdf
+recursive-include LAM_tools/examples/test_corpus/reference_text *.txt
+recursive-include LAM_tools/examples/test_corpus/expected *.md
+recursive-include LAM_tools/packaging *.md *.spec *.json *.bat
+recursive-include LAM_tools/scripts *.py *.ps1
+recursive-include LAM_tools/src *.py *.md
+recursive-include LAM_tools/tests *.py *.md *.txt
+prune LAM_tools/.build
+prune LAM_tools/dist
+prune LAM_tools/tmp
+prune LAM_tools/dev_local
+prune LAM_tools/reports_local
+prune LAM_tools/release_staging
+prune LAM_tools/tests/local
+prune LAM_tools/examples/test_corpus/downloaded
+prune LAM_tools/packaging/assets/easyocr-models
+prune LAM_tools/packaging/vendor
+global-exclude .env __pycache__ *.py[cod] *.log *.tmp *.part summary.md

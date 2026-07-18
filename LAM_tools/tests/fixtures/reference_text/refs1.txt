@@ -1,0 +1,2 @@
+[1] Smith J, Doe A. A deterministic reference import study. Journal of Test Systems. 2024;12(3):101-110. doi:10.1234/ref.one
+[2] Chen L, Patel R. Safe metadata registration without local documents. Metadata Engineering. 2023;8(2):20-29. https://doi.org/10.1234/ref.two
