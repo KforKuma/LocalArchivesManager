@@ -24,6 +24,11 @@ htmlcov/
 dev_local/
 tests/local/
 reports_local/
+tmp/
+reports/
+audit/
+usertest/
+tests/usertest*/
 release_staging/
 packaging/cache/
 packaging/vendor/

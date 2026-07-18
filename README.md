@@ -333,8 +333,10 @@ python -m pytest -m ocr_live
 Ordinary tests use temporary libraries and do not touch the real Catalogue or
 PDF collection. Session startup rejects a basetemp below the project/real
 library, masks `LIBRARY_ROOT`, refuses implicit Settings roots in test mode and
-terminates elevated Windows runs unless explicitly overridden. Live tests are
-excluded unless explicitly selected.
+terminates elevated Windows runs. Test mode does not load the source `.env`,
+disables OCR/model downloads and blocks network sockets unless an explicit live
+marker was selected. These safety checks have no default-suite bypass. Live
+tests are excluded unless explicitly selected.
 
 ## Stable public surface
 

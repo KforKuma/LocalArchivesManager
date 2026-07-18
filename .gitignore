@@ -45,3 +45,17 @@ htmlcov/
 dev_local/
 tests/local/
 reports_local/
+/tmp/
+/reports/
+/audit/
+/usertest/
+/开发资料/
+
+# Superseded local planning and audit working files
+/CLI_060_PROPOSAL.md
+/CLI_AUDIT_*.md
+/CLI_COMMAND_CATALOGUE.*
+/CLI_NO_AGENT_WORKFLOW.md
+/MIGRATION_0.5.0.md
+/TMP_PERMISSION_AUDIT.*
+/Workflows_backup*.md

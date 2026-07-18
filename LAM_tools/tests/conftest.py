@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import ctypes
 import os
+import socket
 import uuid
 import hashlib
 import re
@@ -13,6 +14,7 @@ from openpyxl.styles import Font, PatternFill
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 from lam.schema import CATALOGUE_FIELDS, DOCUMENT_FIELDS
+from fixtures.legacy.factory import create_legacy_library
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -38,18 +40,11 @@ def _windows_elevated() -> bool:
 
 def pytest_sessionstart(session):
     """Fail before collection if pytest infrastructure can touch the real library."""
-    allow_real = os.getenv("LAM_ALLOW_REAL_LIBRARY_TESTS", "").casefold() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
     os.environ["LAM_TESTING"] = "1"
     os.environ["LAM_REAL_LIBRARY_ROOT"] = str(REAL_LIBRARY_ROOT)
-    if not allow_real:
-        os.environ.pop("LIBRARY_ROOT", None)
+    os.environ.pop("LIBRARY_ROOT", None)
     basetemp = session.config._tmp_path_factory.getbasetemp().resolve()
-    if not allow_real and (
+    if (
         _is_within(basetemp, REAL_LIBRARY_ROOT)
         or _is_within(basetemp, PROJECT_ROOT)
     ):
@@ -57,7 +52,7 @@ def pytest_sessionstart(session):
             f"Unsafe pytest basetemp inside project/real library: {basetemp}",
             returncode=10,
         )
-    if not allow_real and _windows_elevated():
+    if _windows_elevated():
         pytest.exit(
             "LAM tests refuse an elevated Windows token by default",
             returncode=10,
@@ -65,48 +60,21 @@ def pytest_sessionstart(session):
 
 
 @pytest.fixture(autouse=True)
-def disable_real_ocr_by_default(monkeypatch):
-    """Default tests never initialize or download real OCR models."""
+def isolate_default_test_environment(monkeypatch, request):
+    """Default tests never use real roots, dotenv, network, or OCR downloads."""
     monkeypatch.setenv("OCR_ENABLED", "false")
+    monkeypatch.setenv("OCR_DOWNLOAD_ENABLED", "false")
+    monkeypatch.delenv("LIBRARY_ROOT", raising=False)
+    network_markers = ("live", "live_provider", "live_download", "ocr_live")
+    if any(request.node.get_closest_marker(name) for name in network_markers):
+        return
 
+    def blocked(*_args, **_kwargs):
+        raise RuntimeError("Default LAM tests may not open network sockets")
 
-HEADERS = [
-    "id",
-    "title",
-    "authors",
-    "doi",
-    "pmid",
-    "manual_tags",
-    "topic_folder",
-    "pdf_status",
-    "pdf_filename",
-    "pdf_relative_path",
-    "date_updated",
-    "notes",
-    "uncertainty",
-    "custom_column",
-    "year",
-    "journal",
-    "journal_abbrev",
-    "publication_type",
-]
-
-
-def create_catalogue(root: Path, rows: list[dict[str, object]]) -> Path:
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Catalogue"
-    sheet.append(HEADERS)
-    for cell in sheet[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="1F4E78")
-    for row in rows:
-        sheet.append([row.get(header) for header in HEADERS])
-    notes = workbook.create_sheet("Other sheet")
-    notes["A1"] = "preserve me"
-    path = root / "catalogue.xlsx"
-    workbook.save(path)
-    return path
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
 
 
 def write_pdf(path: Path, marker: bytes = b"paper") -> None:
@@ -166,15 +134,7 @@ def write_text_pdf(
 @pytest.fixture
 def legacy_library_factory(tmp_path: Path):
     def factory(rows: list[dict[str, object]], files: dict[str, bytes] | None = None) -> Path:
-        root = tmp_path / "library"
-        root.mkdir()
-        (root / "Inbox").mkdir()
-        (root / "Registered").mkdir()
-        (root / "Topics").mkdir()
-        create_catalogue(root, rows)
-        for relative, marker in (files or {}).items():
-            write_pdf(root / relative, marker)
-        return root
+        return create_legacy_library(tmp_path / "library", rows, files)
 
     return factory
 

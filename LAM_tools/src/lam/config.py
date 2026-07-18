@@ -198,10 +198,10 @@ class Settings:
         allow_missing_root: bool = False,
     ) -> "Settings":
         project_root = Path(__file__).resolve().parents[2]
-        _load_optional_dotenv(project_root)
         testing = _env_bool("LAM_TESTING", False)
-        allow_real_tests = _env_bool("LAM_ALLOW_REAL_LIBRARY_TESTS", False)
-        if testing and root is None and not allow_real_tests:
+        if not testing:
+            _load_optional_dotenv(project_root)
+        if testing and root is None:
             raise ConfigurationError(
                 "LAM_TESTING requires an explicit isolated library root; implicit .env/LIBRARY_ROOT resolution is disabled"
             )
@@ -211,7 +211,7 @@ class Settings:
                 "Library root is not configured; pass --root or set LIBRARY_ROOT"
             )
         library_root = Path(selected).expanduser().resolve()
-        if testing and not allow_real_tests:
+        if testing:
             real_root_value = os.getenv("LAM_REAL_LIBRARY_ROOT", "").strip()
             real_root = (
                 Path(real_root_value).expanduser().resolve()
