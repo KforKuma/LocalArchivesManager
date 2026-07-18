@@ -30,6 +30,9 @@ packaging/vendor/
 packaging/models/
 *.spec.local
 *.pdf
+!examples/test_corpus/included/*.pdf
+examples/test_corpus/downloaded/*
+!examples/test_corpus/downloaded/.gitkeep
 summary.md
 *.log
 *.part

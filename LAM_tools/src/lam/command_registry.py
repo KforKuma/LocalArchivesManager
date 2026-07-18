@@ -33,6 +33,10 @@ class CommandDefinition:
     report_type: str = ""
     visibility: str = "public"
     canonical_command: str = ""
+    public_forms: tuple[str, ...] = ()
+    usage: str = ""
+    mode_contract: str = ""
+    network_contract: str = ""
 
     @property
     def read_only(self) -> bool:
@@ -50,6 +54,7 @@ class CommandDefinition:
         payload = asdict(self)
         payload["arguments"] = list(self.arguments)
         payload["aliases"] = list(self.aliases)
+        payload["public_forms"] = list(self.public_forms)
         payload["actual_exit_codes"] = list(self.actual_exit_codes)
         payload["read_only"] = self.read_only
         payload["modifies_files"] = self.modifies_files
@@ -79,6 +84,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=(0, 3, 10, 20, 30),
         report_type="library_init",
+        usage="lam [GLOBAL] init (--dry-run | --apply)",
+        mode_contract="explicit dry-run or apply",
+        network_contract="local only",
     ),
     CommandDefinition(
         "check",
@@ -92,6 +100,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=LOCAL_WORKFLOW_CODES,
         report_type="daily_check",
+        usage="lam [GLOBAL] check [--dry-run]",
+        mode_contract="apply by default; --dry-run previews",
+        network_contract="local only",
     ),
     CommandDefinition(
         "register",
@@ -110,6 +121,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=NETWORK_WORKFLOW_CODES,
         report_type="inbox_register",
+        usage="lam [GLOBAL] register [--dry-run] [OPTIONS]",
+        mode_contract="apply by default; --dry-run previews",
+        network_contract="provider access unless --offline; cache controls supported",
     ),
     CommandDefinition(
         "search",
@@ -127,6 +141,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=NETWORK_WORKFLOW_CODES,
         report_type="metadata_query",
+        usage="lam [GLOBAL] search [--dry-run] SELECTOR [OPTIONS]",
+        mode_contract="apply by default; --dry-run previews",
+        network_contract="provider access unless --offline; cache controls supported",
     ),
     CommandDefinition(
         "file",
@@ -142,6 +159,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=LOCAL_WORKFLOW_CODES,
         report_type="catalogue_filing",
+        usage="lam [GLOBAL] file [--dry-run]",
+        mode_contract="apply by default; --dry-run previews",
+        network_contract="local only",
     ),
     CommandDefinition(
         "delete",
@@ -157,6 +177,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=LOCAL_WORKFLOW_CODES,
         report_type="paper_delete",
+        usage="lam [GLOBAL] delete --paper-uuid UUID (--dry-run | --apply)",
+        mode_contract="explicit dry-run or apply; agent apply is refused",
+        network_contract="local only",
     ),
     CommandDefinition(
         "export",
@@ -166,6 +189,8 @@ COMMANDS = (
         (
             *GLOBAL,
             "zotero",
+            "--dry-run",
+            "--apply",
             "--all",
             "--paper-uuid",
             "--topic-folder",
@@ -175,8 +200,6 @@ COMMANDS = (
             "--refresh",
             "--no-cache-write",
             "--output",
-            "--dry-run",
-            "--apply",
         ),
         writes_cache=True,
         uses_network=True,
@@ -185,6 +208,11 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=NETWORK_WORKFLOW_CODES,
         report_type="citation_export",
+        canonical_command="export zotero",
+        public_forms=("export zotero",),
+        usage="lam [GLOBAL] export zotero (--dry-run | --apply) SELECTOR [OPTIONS]",
+        mode_contract="explicit dry-run or apply",
+        network_contract="PubMed for official records unless --offline; dedicated cache controls supported",
     ),
     CommandDefinition(
         "review",
@@ -201,6 +229,9 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=NETWORK_WORKFLOW_CODES,
         report_type="review",
+        usage="lam [GLOBAL] review (--dry-run | --apply) SELECTOR [OPTIONS]",
+        mode_contract="explicit dry-run or apply",
+        network_contract="local unless --provider is supplied; cache controls then apply",
     ),
     CommandDefinition(
         "status",
@@ -213,13 +244,23 @@ COMMANDS = (
         may_download_models=True,
         actual_exit_codes=(0, 2, 10, 20, 30),
         report_type="status",
+        public_forms=(
+            "status library",
+            "status environment",
+            "status commands",
+            "status recovery",
+            "status config",
+        ),
+        usage="lam [GLOBAL] status {library|environment|commands|recovery|config}",
+        mode_contract="diagnostic; no dry-run/apply mode",
+        network_contract="local except environment --initialize-ocr-models",
     ),
     CommandDefinition(
         "recover",
         "Recover interrupted operations and unambiguous record bindings",
         "Recovery",
         "maintenance",
-        (*EXPLICIT, "--scope", "--list-trash", "--trash-id", *PROVIDER),
+        (*EXPLICIT, "--list-trash", "--trash-id", "--scope", *PROVIDER),
         uses_ocr=True,
         modifies_business_state=True,
         writes_cache=True,
@@ -231,13 +272,16 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=NETWORK_WORKFLOW_CODES,
         report_type="recover",
+        usage="lam [GLOBAL] recover [--list-trash | --trash-id ID | --scope SCOPE] [MODE] [OPTIONS]",
+        mode_contract="--list-trash is read-only without a mode; all recovery routes require dry-run or apply",
+        network_contract="local except Inbox scope; provider cache controls apply only there",
     ),
     CommandDefinition(
         "migrate",
         "Upgrade Catalogue semantics, identifiers/Documents, or legacy Topics layout",
         "Migration",
         "migration",
-        (*EXPLICIT, "schema|identifiers|topics", "--include-topic"),
+        (*GLOBAL, "schema|identifiers|topics", "--dry-run", "--apply", "--include-topic"),
         modifies_business_state=True,
         modifies_managed_files=True,
         modifies_catalogue=True,
@@ -246,18 +290,26 @@ COMMANDS = (
         supports_dry_run=True,
         actual_exit_codes=LOCAL_WORKFLOW_CODES,
         report_type="migration",
+        public_forms=("migrate schema", "migrate identifiers", "migrate topics"),
+        usage="lam [GLOBAL] migrate {schema|identifiers|topics} (--dry-run | --apply) [OPTIONS]",
+        mode_contract="subcommand followed by explicit dry-run or apply",
+        network_contract="local only",
     ),
     CommandDefinition(
         "cleanup",
-        "Apply allowlisted generated-file retention",
+        "Apply allowlisted generated-file and trash retention",
         "Cleanup",
         "maintenance",
         (*EXPLICIT, "--include-test-artifacts", "--purge-trash", "--older-than"),
         modifies_business_state=True,
+        modifies_managed_files=True,
         requires_lock=True,
         supports_dry_run=True,
         actual_exit_codes=(0, 3, 10, 30),
         report_type="cleanup",
+        usage="lam [GLOBAL] cleanup (--dry-run | --apply) [--include-test-artifacts] [--purge-trash --older-than DAYS]",
+        mode_contract="explicit dry-run or apply",
+        network_contract="local only",
     ),
     CommandDefinition(
         "doctor",
@@ -272,6 +324,10 @@ COMMANDS = (
         actual_exit_codes=(0, 2, 10, 30),
         report_type="doctor",
         canonical_command="status environment",
+        public_forms=("status environment",),
+        usage="lam [GLOBAL] doctor [--initialize-ocr-models]",
+        mode_contract="diagnostic alias; no dry-run/apply mode",
+        network_contract="local unless --initialize-ocr-models is supplied",
     ),
     CommandDefinition(
         "commands",
@@ -283,6 +339,10 @@ COMMANDS = (
         actual_exit_codes=(0, 10, 30),
         report_type="command_registry",
         canonical_command="status commands",
+        public_forms=("status commands",),
+        usage="lam [GLOBAL] commands",
+        mode_contract="diagnostic alias; no dry-run/apply mode",
+        network_contract="local only",
     ),
 )
 
@@ -351,8 +411,9 @@ def command_markdown_table() -> str:
         "|---|---|---|---:|---:|",
     ]
     for item in COMMANDS:
+        display_name = "export zotero" if item.name == "export" else item.name
         lines.append(
-            f"| `lam {item.name}` | {item.category} | {item.purpose} | "
+            f"| `lam {display_name}` | {item.category} | {item.purpose} | "
             f"{'yes' if item.supports_dry_run else 'no'} | "
             f"{'yes' if item.uses_network else 'no'} |"
         )

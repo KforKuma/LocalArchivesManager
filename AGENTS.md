@@ -12,10 +12,16 @@ For standard library operations, invoke the public LAM CLI instead of
 reimplementing an existing command. Agent-originated calls must pass
 `--caller agent`. Do not use temporary Python scripts to replace available CLI
 behavior, edit `.library_state/` directly, move/rename/delete PDFs directly, or
-directly edit machine-owned Catalogue fields. The Agent selects commands and
-explains results; LAM performs deterministic execution. If a command returns
-`needs_review`, summarize the consolidated issues without repeating the
-underlying operation.
+directly edit Catalogue or Documents. The Agent selects commands and explains
+results; LAM performs deterministic execution.
+
+Before an Agent invokes any command that may modify business state, it must run
+the same selection with `--dry-run` and review the result. It may apply only
+when the user requested that workflow, the public contract permits Agent apply,
+and the preview reveals no new blocker requiring confirmation. If a command
+returns `needs_review`, stop that affected operation, summarize the consolidated
+issues, and do not repeat or automatically retry it. Unrelated safe items may
+continue.
 
 ---
 
@@ -75,10 +81,14 @@ Interpretation:
 
 ## Core safety rules
 
-1. Never delete user or library files. Only an explicitly requested
-   `lam cleanup --apply` may delete strictly allowlisted machine-generated
-   artifacts under its documented retention rules; Workflow 4 may remove only
-   a truly empty directory below `Topics/` after moving its last PDF.
+1. Never delete user or library files directly. The public deletion lifecycle
+   has three narrow exceptions: user-executed `lam delete --apply` may move one
+   complete paper entity into recoverable LAM trash; explicitly requested
+   `lam cleanup --purge-trash --apply` may permanently remove only validated,
+   expired trash entries; ordinary `lam cleanup --apply` may delete strictly
+   allowlisted machine artifacts. Workflow 4 may also remove only a truly empty
+   directory below `Topics/` after moving its last PDF. An Agent may preview
+   `lam delete`, but the CLI refuses Agent apply.
 2. Never overwrite a PDF with different content.
 3. Never overwrite user-written notes, tags, classifications, or confirmations.
 4. Never silently resolve low-confidence matches or conflicting metadata.
@@ -166,6 +176,8 @@ If a non-empty value conflicts with newly retrieved metadata:
 The following fields may be maintained by the workflows:
 
 ```text
+record_origin
+document_expectation
 auto_tags
 suggested_topic
 source
@@ -241,8 +253,13 @@ This means:
 - An explicit `lam migrate topics --apply` may move confirmed legacy root topic
   directories into `Topics/`, normalize legacy paths, and remove only the now
   empty legacy directory entry.
+- An explicit `lam delete --dry-run` may preview moving one complete paper
+  entity to recoverable trash. Agent apply is prohibited; only a user caller may
+  execute `lam delete --apply`.
 - An explicit `lam cleanup --apply` may remove only allowlisted
   machine-generated artifacts selected under the documented retention policy.
+  Permanent trash removal additionally requires explicit `--purge-trash` and
+  applies only to validated entries older than `--older-than`.
 - An explicit `lam export zotero ... --apply` may create or update only
   LAM-owned citation artifacts at the selected output path. It never changes
   Catalogue, Documents, PDFs, topic paths, Zotero state, or the official
@@ -252,14 +269,18 @@ This means:
 - An explicit `lam recover --apply` may repair interrupted or inconsistent
   machine state within its selected scope; only Inbox recovery may re-enter
   Workflow 3 or use provider policy, and filed documents are never
-  re-registered.
+  re-registered. `recover --list-trash` is read-only; explicit
+  `recover --trash-id ID --apply` may restore only one unambiguous committed
+  trash entity without collisions.
+- An explicit `lam migrate schema --apply` may upgrade only a strict 0.6.0
+  workbook to the 0.6.1 `record_origin` and `document_expectation` semantics.
 - An explicit `lam migrate identifiers --apply` may upgrade only a recognized
   legacy workbook schema; unknown or future schemas must be refused.
 - These routine actions do not require separate per-file approval.
 
 Additional confirmation is required only when an action involves:
 
-- deletion outside the two narrowly authorized cases above;
+- deletion outside the narrowly authorized lifecycle above;
 - overwriting different file content;
 - merging folders;
 - a low-confidence or ambiguous paper match;

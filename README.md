@@ -23,10 +23,10 @@ path, hash, status and file-level uncertainty. `topic_folder` is relative to
 
 ## Install
 
-From the repository root in the `lam_agent` Conda environment:
+From the repository root in the `lam-dev` Conda environment:
 
 ```powershell
-conda activate lam_agent
+conda activate lam-dev
 python -m pip install -e ".[dev]"
 ```
 
@@ -43,18 +43,20 @@ This table is generated from the same registry returned by
 | `lam search` | daily | Query providers and optionally update, normalize, or download records | yes | yes |
 | `lam file` | daily | File or refile registered Documents under Topics/ | yes | no |
 | `lam delete` | maintenance | Move one complete paper entity into recoverable LAM trash | yes | no |
-| `lam export` | export | Export registered citations for Zotero without modifying the library | yes | yes |
+| `lam export zotero` | export | Export registered citations for Zotero without modifying the library | yes | yes |
 | `lam review` | maintenance | Recheck and clear objectively resolved machine blockers | yes | yes |
 | `lam status` | diagnostic | Inspect library, environment, commands, recovery, or configuration | no | yes |
 | `lam recover` | maintenance | Recover interrupted operations and unambiguous record bindings | yes | yes |
 | `lam migrate` | migration | Upgrade Catalogue semantics, identifiers/Documents, or legacy Topics layout | yes | no |
-| `lam cleanup` | maintenance | Apply allowlisted generated-file retention | yes | no |
+| `lam cleanup` | maintenance | Apply allowlisted generated-file and trash retention | yes | no |
 | `lam doctor` | diagnostic | Alias for status environment | no | yes |
 | `lam commands` | diagnostic | Alias for status commands | no | no |
 
 `doctor` maps to `status environment`; `commands` maps to `status commands`.
 Each alias uses one RunContext and writes one invocation. JSON preserves both
 the invoked `command` and its `canonical_command`.
+The generated, argument-level contract is in
+[`LAM_tools/docs/CLI_COMMANDS.md`](LAM_tools/docs/CLI_COMMANDS.md).
 
 ## Initialize a library
 
@@ -105,6 +107,9 @@ lam --root D:\ResearchLibrary status environment
 lam --root D:\ResearchLibrary status commands --json
 lam --root D:\ResearchLibrary status recovery
 lam --root D:\ResearchLibrary status config
+lam --root D:\ResearchLibrary recover --list-trash
+lam --root D:\ResearchLibrary recover --trash-id DELETION_UUID --dry-run
+lam --root D:\ResearchLibrary recover --trash-id DELETION_UUID --apply
 lam --root D:\ResearchLibrary recover --scope auto --dry-run
 lam --root D:\ResearchLibrary recover --scope auto --apply
 ```
@@ -115,11 +120,14 @@ shows secrets only as `configured` or `missing`. `status recovery` reports lock
 state, unfinished journals, snapshot generations, backups and orphan
 Inbox/Registered files.
 
-Recovery is limited to abnormal or interrupted state. Inbox recovery re-enters
+Scope recovery is limited to abnormal or interrupted state. Inbox recovery re-enters
 normal Workflow 3 and may use provider flags. Registered recovery reconnects
 only unique evidence from journals, hashes and names. Filed documents are never
 re-registered, queried, parsed or renamed. Historical mixed publication types
-are repaired only when that anomaly is detected.
+are repaired only when that anomaly is detected. `recover --list-trash` is a
+read-only local inventory. `recover --trash-id` restores one committed trash
+entity only when its UUID, Catalogue/Documents records, files and target paths
+remain unambiguous and collision-free.
 
 ## Search, providers and downloads
 
@@ -153,8 +161,9 @@ lam --root D:\ResearchLibrary register --reference-text only --reference-file re
 lam --root D:\ResearchLibrary register --reference-text auto --download-missing --json
 ```
 
-`auto` processes recognized reference lists alongside PDFs; `only` processes
-only selected or discovered `.txt` batches. Numbered, bulleted, blank-line and
+`auto` processes recognized reference lists alongside PDFs; `only` skips PDFs
+but still requires each selected or discovered `.txt` batch to pass reference-
+list recognition. Numbered, bulleted, blank-line and
 soft-wrapped references are normalized and segmented before PMID, DOI, arXiv or
 supported-title provider lookup. Ambiguous, invalid and not-found entries never
 create speculative rows. Batch and existing-Catalogue deduplication use PMID,
@@ -219,6 +228,8 @@ Maintenance and migration commands require exactly one of `--dry-run` and
 `--apply`.
 
 ```powershell
+lam --root D:\ResearchLibrary migrate schema --dry-run
+lam --root D:\ResearchLibrary migrate schema --apply
 lam --root D:\ResearchLibrary migrate identifiers --dry-run
 lam --root D:\ResearchLibrary migrate identifiers --apply
 lam --root D:\ResearchLibrary migrate topics --dry-run
@@ -226,16 +237,34 @@ lam --root D:\ResearchLibrary migrate topics --apply
 lam --root D:\ResearchLibrary cleanup --dry-run
 lam --root D:\ResearchLibrary cleanup --apply
 lam --root D:\ResearchLibrary cleanup --dry-run --include-test-artifacts
+lam --root D:\ResearchLibrary delete --paper-uuid UUID --dry-run
+lam --root D:\ResearchLibrary delete --paper-uuid UUID --apply
+lam --root D:\ResearchLibrary cleanup --purge-trash --older-than 30d --dry-run
+lam --root D:\ResearchLibrary cleanup --purge-trash --older-than 30d --apply
 ```
 
+`migrate schema` upgrades a strict 0.6.0 workbook to the 0.6.1
+`record_origin` and `document_expectation` semantics. It preserves UUIDs and
+user-controlled content; legacy rows without decisive evidence remain
+`document_expectation=unknown` and require review.
 `migrate identifiers` detects current, supported legacy, and unknown/future
 schemas. A current workbook returns `no_changes`; an unknown or future layout
 is refused. Documents migration is an internal stage of this command.
 `migrate topics` only upgrades confirmed legacy root topic directories.
 
-Cleanup only applies documented retention to allowlisted machine artifacts. It
-never selects PDFs, `catalogue.xlsx`, project instructions, `summary.md`, user
-notes, topic folders, unfinished journals, or paths outside maintenance roots.
+`delete` moves the complete Catalogue paper entity, its Documents rows and
+existing managed files into `.library_state/trash/<deletion-id>/` with a
+manifest and tombstone. It is recoverable with `recover --trash-id`; Agent
+apply is refused by the CLI, although Agent dry-run is allowed.
+
+Ordinary cleanup only applies documented retention to allowlisted machine
+artifacts and never selects library PDFs, `catalogue.xlsx`, project
+instructions, `summary.md`, user notes, topic folders, unfinished journals, or
+paths outside maintenance roots. The only PDF-capable cleanup route is explicit
+`--purge-trash`: it permanently removes complete, validated trash entries older
+than `--older-than` and is no longer recoverable. It never selects live
+Inbox/Registered/Topics files, tombstones, invalid manifests, symlinks, or
+reparse content.
 Manifested production workspaces are cleaned immediately after closed resources;
 retained debug artifacts carry an expiry. Historical strict `pytest-*` roots
 are only eligible with `--include-test-artifacts`; cleanup never changes ACLs or
@@ -295,6 +324,7 @@ failure and `40` provider/network failure.
 
 ```powershell
 python -m pytest
+python LAM_tools/scripts/generate_cli_docs.py --check
 python -m pytest -m live
 python -m pytest -m live_download
 python -m pytest -m ocr_live

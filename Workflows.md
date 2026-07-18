@@ -26,7 +26,7 @@ Workflow 4: file by topic_folder
    Topics/<topic_folder>/
 ```
 
-Since 0.5.2, `Catalogue` is the paper table and `Documents` is the physical
+In the 0.6.1 schema, `Catalogue` is the paper table and `Documents` is the physical
 file table. Every paper has an immutable `paper_uuid`; every file has a stable
 `document_id`. Main and supplementary PDF/XLSX/XLS/CSV files share the same
 paper UUID. `paper_uuid` is the sole internal paper key; file names, locations,
@@ -37,6 +37,8 @@ Upgrade an existing workbook with:
 ```powershell
 lam --root D:\ResearchLibrary migrate identifiers --dry-run
 lam --root D:\ResearchLibrary migrate identifiers --apply
+lam --root D:\ResearchLibrary migrate schema --dry-run
+lam --root D:\ResearchLibrary migrate schema --apply
 ```
 
 Modifying commands run Catalogue preflight before network/PDF/OCR work and
@@ -79,7 +81,8 @@ Interpretation:
   or reserved directory names. Limited nesting is allowed.
 
 Older `id`, `record_uid`, and `pdf_*` columns are accepted only by the explicit
-identifier migration. Ordinary workflows require the strict 0.5.2 schema.
+identifier migration. A strict 0.6.0 workbook is accepted only by the explicit
+schema migration. Ordinary workflows require the strict 0.6.1 schema.
 
 ---
 
@@ -89,6 +92,8 @@ identifier migration. Ordinary workflows require the strict 0.5.2 schema.
 
 ```text
 paper_uuid
+record_origin
+document_expectation
 uncertainty
 title
 authors
@@ -134,6 +139,13 @@ date_updated
 are external identifiers only. A paper has at most one `main` document and may
 have multiple `supplementary` documents. `document_id` is stable and unique.
 
+`record_origin` is machine-maintained provenance with values `pdf`,
+`reference_text`, `provider_import`, `recovered`, or `legacy`.
+`document_expectation` is `required`, `optional`, or `unknown`. A 0.6.0 schema
+migration derives these values from Documents and reference-text receipts;
+legacy rows without decisive evidence remain `unknown` with one review blocker.
+Neither field authorizes identity inference or overwriting user-controlled text.
+
 Legacy columns are accepted only while `migrate identifiers` plans or applies
 the upgrade. Apply validates or recovers each UUID, reconciles old PDF fields
 against Documents and the observed filesystem, validates every foreign key,
@@ -172,6 +184,15 @@ workflow, creator, artifact type, cleanup policy and status. Callers close PDF
 readers, streams and detached PIL images before bounded cleanup retries. Success,
 dry-run and ordinary failure clean immediately; explicit debug retention records
 an expiry. pytest basetemp is never allowed below the project or real library.
+
+## Workflow 1-4 public contract summary
+
+| Workflow | Preconditions | Allowed business mutations | Network / cache | Expected status | Recovery |
+|---|---|---|---|---|---|
+| Workflow 1 / `check` | Strict current schema; readable Catalogue and managed roots; mutation lock for apply | Objective Catalogue/Documents state, official snapshot, report and change log | Local only | `success`, `needs_review`, `no_changes`, `failed` | Preserve user fields; stale snapshot is rebuilt from Catalogue plus observed filesystem; do not recurse in final-check mode |
+| Workflow 2 / `search` | Strict current schema and one valid selector or bounded maintenance mode | Blank machine-fillable metadata, machine-maintained fields, optional validated download to Inbox | Provider-capable; `--offline`, `--refresh`, `--no-cache-write` | `success`, `needs_review`, `no_changes`, `failed` | Preserve conflicts in uncertainty; rollback/atomic Catalogue commit; rerun exact or cached queries safely |
+| Workflow 3 / `register` | Strict current schema; eligible Inbox PDF/supplement/reference text; bounded options | Catalogue/Documents, safe rename, Inbox to Registered, completed text batch to Imports, optional OA PDF direct to Registered | Provider-capable after local evidence; cache/offline controls | `success`, `needs_review`, `no_changes`, `failed` | Leave uncertain files in place; provisional Documents records custody; operation journals and reference receipts make reruns incremental |
+| Workflow 4 / `file` | Strict current schema; confirmed safe `topic_folder`; registered Documents group | Move one paper's Documents under Topics, update Documents paths/status, remove only a newly empty old topic directory | Local only | `success`, `needs_review`, `no_changes`, `failed` | Pre-commit fingerprint recheck, no-overwrite move, operation journal and rollback; rerun completes an interrupted Catalogue phase |
 
 ---
 
@@ -597,7 +618,7 @@ backends are `NativePdfBackend` and `EasyOcrRegionBackend`.
 sufficient and EasyOCR regions for scanned or screenshot-wrapped content.
 `DOCUMENT_ANALYSIS_FALLBACKS=native,easyocr` reserves an ordered extension point;
 uninstalled Docling, GROBID, layout-aware, or advanced-vision backends are not
-called implicitly and return an explainable unavailable result. Version 0.6.0
+called implicitly and return an explainable unavailable result. Version 0.6.1
 keeps the installed backend set unchanged and adds no new large model family.
 
 Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. A usable
@@ -913,7 +934,9 @@ lam register --reference-text only --reference-file refs1.txt --json
 
 The default is `--reference-text never`; ordinary registration ignores `.txt`.
 `auto` processes recognized reference lists and Inbox documents in one top-level
-run, while `only` skips PDFs. `--reference-file` may be repeated and
+run, while `only` skips PDFs but does not bypass file-level reference-list
+recognition. Unrecognized note or prose files are skipped in both modes.
+`--reference-file` may be repeated and
 `--max-references` bounds provider work.
 
 Reference text is a `reference_import_batch`, not a managed Document. LAM
@@ -1265,6 +1288,68 @@ The final check refreshes the committed snapshot generation.
 
 ---
 
+# Maintenance workflow: Paper deletion and trash lifecycle
+
+## Trigger and authorization
+
+Paper deletion is an explicit, recoverable entity operation:
+
+```text
+lam --root D:\ResearchLibrary delete --paper-uuid UUID --dry-run
+lam --root D:\ResearchLibrary delete --paper-uuid UUID --apply
+lam --root D:\ResearchLibrary recover --list-trash
+lam --root D:\ResearchLibrary recover --trash-id DELETION_UUID --dry-run
+lam --root D:\ResearchLibrary recover --trash-id DELETION_UUID --apply
+```
+
+The UUID must identify exactly one current Catalogue row. Dry run lists the
+Catalogue row, every Documents row, present managed file, and already-missing
+file without changing business state. The CLI refuses `delete --apply` when
+`--caller agent` is used; an Agent may only preview and report the plan.
+
+## Allowed mutations and transaction
+
+Apply creates one `.library_state/trash/<deletion-id>/` entry with a manifest,
+the complete Catalogue record, all Documents records, and staged copies of
+existing files moved from `Inbox/`, `Registered/`, or `Topics/`. It then removes
+the paper and its Documents rows atomically, records a tombstone and index entry,
+appends the change log, and runs Workflow 1 once in final-check mode. It never
+uses the network, infers identity, changes another paper, follows a path outside
+managed namespaces, or overwrites a trash target. A missing file is recorded in
+the manifest rather than fabricated.
+
+If staging or Catalogue commit fails, moved files are rolled back and the
+uncommitted trash directory is removed. An unsafe path, duplicate registered
+path, different-content collision, malformed UUID, or non-unique paper is a
+blocking failure. Expected statuses are `success`, `needs_review`,
+`no_changes`, or `failed`; runtime reports and invocations remain auditable.
+
+## Restore and final purge
+
+`recover --list-trash` is local and read-only and requires no mode.
+`recover --trash-id` accepts exactly one deletion UUID and requires dry-run or
+apply. Restore requires a committed manifest, complete stored Catalogue and
+Documents records, an absent paper UUID in the live Catalogue, available trash
+payloads, and collision-free original target paths. Apply preserves the stored
+`paper_uuid` and `document_id` values, restores files and rows transactionally,
+updates manifest/tombstone status, appends the change log, and runs one final
+Workflow 1 check. A failed commit rolls staged files back into trash.
+
+Final removal is a separate, explicit cleanup operation:
+
+```text
+lam --root D:\ResearchLibrary cleanup --purge-trash --older-than 30d --dry-run
+lam --root D:\ResearchLibrary cleanup --purge-trash --older-than 30d --apply
+```
+
+Only one-level trash entries with a readable manifest, status `committed` or
+`recovered`, age strictly beyond the positive day threshold, and no symlink or
+reparse content are eligible. Purge deletes the complete entry, including any
+stored PDF payload, and is irreversible. It never selects live managed files or
+the tombstones directory. Invalid/unreadable entries are reported and retained.
+
+---
+
 # Initialization, review, status, recovery, and migration
 
 ## Initialization
@@ -1306,7 +1391,10 @@ only as `configured` or `missing`.
 
 `lam recover --dry-run|--apply` accepts scope `auto`, `workbook`, `inbox`,
 `registered`, or `publication-types`. It is for unfinished or inconsistent operations, not
-routine migration. Inbox scope re-enters Workflow 3 and is the only recovery
+routine migration. `lam recover --list-trash` and `lam recover --trash-id ID
+--dry-run|--apply` implement the separate paper-trash lifecycle documented
+above; list mode is read-only and cannot be combined with a mode or scope, while
+trash-id cannot be combined with scope. Inbox scope re-enters Workflow 3 and is the only recovery
 scope allowed to use provider policy. Registered scope restores a Documents
 binding only from unique journal/name/hash evidence and never files it.
 Already filed documents are not re-registered, parsed, queried, renamed, or
@@ -1315,6 +1403,14 @@ detected. User-owned workbook fields are never restored wholesale from an old
 backup.
 
 ## Migration
+
+`lam migrate schema --dry-run|--apply` accepts only a strict 0.6.0 workbook and
+adds the 0.6.1 `record_origin` and `document_expectation` semantics. It derives
+`reference_text`/`optional` from completed receipts, `pdf`/`required` from
+Documents, and otherwise `legacy`/`unknown`; unknown expectations receive one
+machine review blocker. Apply preserves UUIDs and user-controlled content,
+creates a backup and operation journal, writes atomically, appends the change
+log, and runs one final Workflow 1 check.
 
 `lam migrate identifiers --dry-run|--apply` strictly classifies the workbook as
 current, supported legacy, or unknown/future. Current returns `no_changes`;
@@ -1326,9 +1422,9 @@ legacy-root-topic implementation.
 
 # CLI execution and invocation audit
 
-Since 0.5.4, `--root`, `--json`, `--verbose`, and `--caller` are true top-level
+In 0.6.1, `--root`, `--json`, `--verbose`, and `--caller` are true top-level
 options. Prefer `lam --root D:\ResearchLibrary --caller agent --json check`;
-the historical placement after the command remains accepted during 0.5.x.
+the parser also accepts these shared options after the top-level command.
 Daily commands apply by default and use `--dry-run` for preview. Maintenance
 and migration commands require exactly one of `--dry-run` or `--apply`.
 Diagnostic commands expose neither flag.
@@ -1411,6 +1507,8 @@ lam --root D:\ResearchLibrary cleanup --dry-run
 lam --root D:\ResearchLibrary cleanup --apply
 lam --root D:\ResearchLibrary cleanup --dry-run --include-test-artifacts
 lam --root D:\ResearchLibrary cleanup --apply --include-test-artifacts
+lam --root D:\ResearchLibrary cleanup --purge-trash --older-than 30d --dry-run
+lam --root D:\ResearchLibrary cleanup --purge-trash --older-than 30d --apply
 ```
 
 Dry run reports each candidate, its reason, and estimated recoverable bytes
@@ -1435,12 +1533,19 @@ Eligible machine-generated artifacts are limited to:
 - expired citation-export cache entries and stale failed/temporary export
   artifacts; formal `library.nbib`, `library.pubmed.xml`, per-record outputs,
   ownership manifests, and user-selected custom output paths are retained.
+- only when `--purge-trash` is explicit, complete trash entries with manifest
+  status `committed` or `recovered` and `deleted_at` older than the positive
+  `--older-than` day threshold. Invalid manifests, tombstones, symlinks and
+  reparse content are retained and reported.
 
-Cleanup must never select a PDF, `catalogue.xlsx`, `AGENTS.md`, `Workflows.md`,
-`summary.md`, ordinary topic content, symlink/reparse content, or anything
-outside these explicit maintenance roots. It must not infer deletability from a
-generic wildcard, and it must not recursively delete an allowlisted directory
-that contains protected or unrecognized content.
+Ordinary cleanup must never select a live or untrashed PDF, `catalogue.xlsx`,
+`AGENTS.md`, `Workflows.md`, `summary.md`, ordinary topic content,
+symlink/reparse content, or anything outside these explicit maintenance roots.
+The sole PDF-capable path is explicit `--purge-trash`, which deletes a validated
+whole trash entry and its stored payload after retention has elapsed; it never
+selects `Inbox/`, `Registered/`, `Topics/`, or the tombstones directory. Cleanup
+must not infer deletability from a generic wildcard, and it must not recursively
+delete an allowlisted directory that contains protected or unrecognized content.
 
 Temporary entries are classified as `production_temporary_artifact`,
 `failed_temporary_artifact`, `ocr_debug_artifact`, `download_partial`,

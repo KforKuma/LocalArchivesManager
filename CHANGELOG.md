@@ -17,6 +17,9 @@
 - Added trash listing and exact UUID/document-id restoration through `recover`,
   plus explicit age-gated trash payload purge in `cleanup` while retaining
   tombstones.
+- Added a public, reproducible synthetic PDF/reference-text corpus with pinned
+  hashes, a download-only fetcher, corpus regression tests, and source install,
+  corpus, and development tutorials.
 
 ## 0.6.0 - in development
 

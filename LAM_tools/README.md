@@ -23,5 +23,17 @@ lam --root D:\ResearchLibrary status library --json
 ```
 
 The current release work is tracked in the repository-level `CHANGELOG.md`.
-Canonical library behavior remains defined by `AGENTS.md` and `Workflows.md`
-until the synchronized package-resource templates are added in Milestone 3.
+Canonical library behavior is defined by the repository-level `AGENTS.md` and
+`Workflows.md`; byte-identical package templates are shipped under
+`src/lam/resources/` and checked for drift by the release tests.
+
+## Developer documentation
+
+- [Install from source](docs/INSTALL_SOURCE.md)
+- [Public test corpus](docs/TEST_CORPUS.md)
+- [Development guide](docs/DEVELOPMENT.md)
+- [Generated public CLI reference](docs/CLI_COMMANDS.md)
+
+The public synthetic fixtures and their manifest are under
+`examples/test_corpus/`. Optional externally fetched files are always local and
+ignored under `examples/test_corpus/downloaded/`.
