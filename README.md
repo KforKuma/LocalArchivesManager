@@ -1,7 +1,7 @@
 # LAM — Local Archives Manager
 
 LAM is a deterministic local manager for a research literature library.
-Version 0.6.0 starts the stable public-source release line, separates source
+Version 0.6.1 extends the stable public-source release line, separates source
 code from user library data, and preserves the 0.5.9 temporary-workspace and
 reference-text safety contracts.
 It never reads or modifies `summary.md`.
@@ -42,11 +42,12 @@ This table is generated from the same registry returned by
 | `lam register` | daily | Register Inbox PDFs, supplements, and reference text | yes | yes |
 | `lam search` | daily | Query providers and optionally update, normalize, or download records | yes | yes |
 | `lam file` | daily | File or refile registered Documents under Topics/ | yes | no |
+| `lam delete` | maintenance | Move one complete paper entity into recoverable LAM trash | yes | no |
 | `lam export` | export | Export registered citations for Zotero without modifying the library | yes | yes |
 | `lam review` | maintenance | Recheck and clear objectively resolved machine blockers | yes | yes |
 | `lam status` | diagnostic | Inspect library, environment, commands, recovery, or configuration | no | yes |
 | `lam recover` | maintenance | Recover interrupted operations and unambiguous record bindings | yes | yes |
-| `lam migrate` | migration | Upgrade identifiers/Documents schema or legacy Topics layout | yes | no |
+| `lam migrate` | migration | Upgrade Catalogue semantics, identifiers/Documents, or legacy Topics layout | yes | no |
 | `lam cleanup` | maintenance | Apply allowlisted generated-file retention | yes | no |
 | `lam doctor` | diagnostic | Alias for status environment | no | yes |
 | `lam commands` | diagnostic | Alias for status commands | no | no |
@@ -255,7 +256,7 @@ CROSSREF_ENABLED=true
 CROSSREF_EMAIL=you@example.org
 CROSSREF_MIN_INTERVAL_SECONDS=1.0
 CROSSREF_MAX_RESULTS=10
-HTTP_USER_AGENT=LAM/0.6.0
+HTTP_USER_AGENT=LAM/0.6.1
 LAM_KEEP_FAILED_TEMP=false
 LAM_TEMP_RETENTION_HOURS=24
 OCR_ENABLED=true
@@ -309,6 +310,6 @@ excluded unless explicitly selected.
 
 The command registry/help, JSON envelope, statuses/exit codes,
 Catalogue/Documents schema, `.env.example`, Workflow 1–4 rules, `lam init`
-layout and reference-text import behavior are public 0.6.0 contracts. Provider
+layout and reference-text import behavior are public 0.6.1 contracts. Provider
 classes, cache formats, OCR images, temporary layout details, test helpers and
 private debug reports remain internal.

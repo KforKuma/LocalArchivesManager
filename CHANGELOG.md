@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.1 - in development
+
+- Added `record_origin` and `document_expectation` to the Catalogue contract,
+  with constrained values and full-row official snapshots for exact recovery.
+- Added explicit `lam migrate schema --dry-run|--apply` support for strict
+  0.6.0 workbooks. Migration preserves UUIDs and user text, infers required
+  Documents and reference-text-only records, and flags unresolved legacy rows.
+- Updated PDF, provider and reference-text record creation paths to establish
+  provenance and document expectations at creation time.
+- Bumped the package and library schema contracts to 0.6.1 while retaining the
+  old strict field signature for deterministic migration detection.
+- Added paper-entity `lam delete` with mandatory dry-run/apply modes, recoverable
+  trash manifests, complete Catalogue/Documents capture, file rollback on
+  Catalogue commit failure, and an apply prohibition for agent callers.
+- Added trash listing and exact UUID/document-id restoration through `recover`,
+  plus explicit age-gated trash payload purge in `cleanup` while retaining
+  tombstones.
+
 ## 0.6.0 - in development
 
 - Started the public-source release line with a standalone `LAM_tools`
@@ -8,6 +26,15 @@
   public version module and exposed all three through library status.
 - Removed implicit fallback from the source directory to a real library root;
   callers must now pass `--root` or configure `LIBRARY_ROOT`.
+- Added the initial PyInstaller 6 onedir spec, EasyOCR collection hook and an
+  isolated Windows build script using `.build/pyinstaller/` and `dist/`.
+- Made the EasyOCR availability probe frozen-aware so `lam.exe` does not try
+  to relaunch itself as a Python `-c` interpreter.
+- Set Python 3.14 as the official 0.6.0 source/frozen baseline and bounded
+  runtime/build dependencies to compatible major versions validated by the
+  local Python 3.14.6 and PyInstaller 6.21 build environment.
+- Required PyInstaller hooks-contrib 2026.6 or newer within the 2026 series,
+  matching PyInstaller 6.21's own declared dependency.
 
 ## 0.5.9 - 2026-07-17
 

@@ -48,6 +48,7 @@ from .workflows.inbox_register import InboxRegisterWorkflow
 from .workflows.library_init import LibraryInitWorkflow
 from .workflows.metadata_query import MetadataQueryWorkflow
 from .workflows.migration import MigrationWorkflow
+from .workflows.paper_delete import PaperDeleteWorkflow
 from .workflows.publication_type_repair import PublicationTypeRepairWorkflow
 from .workflows.record_normalization import RecordNormalizationWorkflow
 from .workflows.recovery import RecoveryWorkflow
@@ -63,7 +64,7 @@ EXIT_CODES = {
 }
 CALLERS = ("user", "agent", "internal_workflow", "scheduled", "unknown")
 PUBLIC_COMMAND_METAVAR = (
-    "{init,check,register,search,file,export,review,status,recover,migrate,cleanup,doctor,commands}"
+    "{init,check,register,search,file,delete,export,review,status,recover,migrate,cleanup,doctor,commands}"
 )
 
 
@@ -190,6 +191,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("file", parents=[daily], help=command_definition("file").purpose)
 
+    delete = subparsers.add_parser(
+        "delete", parents=[maintenance], help=command_definition("delete").purpose
+    )
+    delete.add_argument("--paper-uuid", required=True)
+
     export = subparsers.add_parser(
         "export", parents=[shared], help=command_definition("export").purpose
     )
@@ -226,8 +232,13 @@ def build_parser() -> argparse.ArgumentParser:
     environment.add_argument("--initialize-ocr-models", action="store_true")
 
     recover = subparsers.add_parser(
-        "recover", parents=[maintenance], help=command_definition("recover").purpose
+        "recover", parents=[shared], help=command_definition("recover").purpose
     )
+    recover_mode = recover.add_mutually_exclusive_group()
+    recover_mode.add_argument("--dry-run", action="store_true", help="Preview only")
+    recover_mode.add_argument("--apply", action="store_true", help="Apply planned changes")
+    recover.add_argument("--list-trash", action="store_true")
+    recover.add_argument("--trash-id")
     recover.add_argument(
         "--scope",
         choices=("auto", "workbook", "inbox", "registered", "publication-types"),
@@ -239,6 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
         "migrate", parents=[shared], help=command_definition("migrate").purpose
     )
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
+    migrate_subparsers.add_parser("schema", parents=[maintenance])
     migrate_subparsers.add_parser("identifiers", parents=[maintenance])
     migrate_topics = migrate_subparsers.add_parser("topics", parents=[maintenance])
     migrate_topics.add_argument("--include-topic", action="append", default=[])
@@ -251,6 +263,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include expired strict pytest temp roots; never changes ACLs",
     )
+    cleanup.add_argument("--purge-trash", action="store_true")
+    cleanup.add_argument("--older-than", default="30d")
     doctor = subparsers.add_parser("doctor", parents=[shared], help=command_definition("doctor").purpose)
     doctor.add_argument("--initialize-ocr-models", action="store_true")
     subparsers.add_parser("commands", parents=[shared], help=command_definition("commands").purpose)
@@ -365,6 +379,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if caller not in CALLERS:
             raise ConfigurationError(f"Unsupported caller value: {caller}")
+        if caller == "agent" and args.command == "delete" and not args.dry_run:
+            raise ConfigurationError(
+                "Agent callers may only run 'lam delete --dry-run'; "
+                "a user must invoke --apply explicitly."
+            )
         permissive = args.command in {"init", "status", "doctor", "commands"}
         settings = Settings.from_root(
             args.root,
@@ -477,6 +496,11 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
         return DailyCheckWorkflow(settings).run(dry_run=args.dry_run)
     if args.command == "file":
         return CatalogueFilingWorkflow(settings).run(dry_run=args.dry_run)
+    if args.command == "delete":
+        return PaperDeleteWorkflow(settings).run(
+            paper_uuid=args.paper_uuid,
+            dry_run=args.dry_run,
+        )
     if args.command == "export":
         return CitationExportWorkflow(settings).run(
             dry_run=args.dry_run,
@@ -505,9 +529,13 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
     if args.command == "commands":
         return CommandAuditWorkflow(settings).run(write_report=False)
     if args.command == "cleanup":
+        if args.older_than != "30d" and not args.purge_trash:
+            raise ConfigurationError("--older-than requires --purge-trash")
         return CleanupWorkflow(settings).run(
             dry_run=args.dry_run,
             include_test_artifacts=args.include_test_artifacts,
+            purge_trash=args.purge_trash,
+            older_than=args.older_than,
         )
     if args.command == "review":
         return ReviewWorkflow(settings).run(
@@ -521,15 +549,27 @@ def _run_command(args: argparse.Namespace, settings: Settings) -> WorkflowResult
             cache_write=not args.no_cache_write,
         )
     if args.command == "recover":
+        if args.list_trash and (args.dry_run or args.apply or args.trash_id):
+            raise ConfigurationError(
+                "--list-trash is read-only and cannot be combined with a mode or --trash-id"
+            )
+        if not args.list_trash and not (args.dry_run or args.apply):
+            raise ConfigurationError("recover requires --dry-run or --apply")
+        if args.trash_id and args.scope != "auto":
+            raise ConfigurationError("--trash-id cannot be combined with --scope")
         return RecoveryWorkflow(settings).run(
             dry_run=args.dry_run,
             scope=args.scope,
             offline=args.offline,
             refresh=args.refresh,
             cache_write=not args.no_cache_write,
+            list_trash=args.list_trash,
+            trash_id=args.trash_id,
         )
     if args.command == "migrate":
         migration = MigrationWorkflow(settings)
+        if args.migrate_command == "schema":
+            return migration.schema(dry_run=args.dry_run)
         if args.migrate_command == "identifiers":
             return migration.identifiers(dry_run=args.dry_run)
         return migration.topics(dry_run=args.dry_run, include_topics=tuple(args.include_topic))

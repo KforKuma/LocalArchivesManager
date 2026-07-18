@@ -7,6 +7,7 @@ from ..exceptions import CatalogueError
 from ..models import WorkflowResult
 from ..schema import (
     CATALOGUE_FIELDS,
+    CATALOGUE_060_FIELDS,
     DOCUMENT_FIELDS,
     LEGACY_CATALOGUE_REQUIRED_FIELDS,
     LEGACY_IDENTITY_FIELDS,
@@ -14,6 +15,7 @@ from ..schema import (
 )
 from ..services.report_service import ReportService
 from .identifier_migration import IdentifierMigrationWorkflow
+from .schema_migration import SchemaMigrationWorkflow
 from .topic_migration import TopicMigrationWorkflow
 
 
@@ -44,6 +46,28 @@ class MigrationWorkflow:
         result = IdentifierMigrationWorkflow(self.settings).run(dry_run=dry_run)
         result.details["schema_detection"] = state
         result.details["internal_document_stage"] = True
+        return result
+
+    def schema(self, *, dry_run: bool) -> WorkflowResult:
+        state = self._schema_state()
+        if state["classification"] == "current":
+            result = WorkflowResult(
+                "schema_migration",
+                dry_run=dry_run,
+                mode="dry_run" if dry_run else "apply",
+            )
+            result.details["schema_detection"] = state
+            result.skipped.append({"reason": "already_current_schema"})
+            result.finalize_status()
+            ReportService(self.settings.reports_dir).write(result)
+            return result
+        if state["classification"] != "schema_060":
+            raise CatalogueError(
+                "migrate schema requires a strict LAM 0.6.0 workbook; "
+                + state.get("reason", f"detected {state['classification']}")
+            )
+        result = SchemaMigrationWorkflow(self.settings).run(dry_run=dry_run)
+        result.details["schema_detection"] = state
         return result
 
     def topics(self, *, dry_run: bool, include_topics: tuple[str, ...] = ()):
@@ -85,6 +109,15 @@ class MigrationWorkflow:
         if catalogue_headers == CATALOGUE_FIELDS and document_headers == DOCUMENT_FIELDS:
             return {
                 "classification": "current",
+                "catalogue_columns": list(catalogue_headers),
+                "document_columns": list(document_headers),
+            }
+        if (
+            catalogue_headers == CATALOGUE_060_FIELDS
+            and document_headers == DOCUMENT_FIELDS
+        ):
+            return {
+                "classification": "schema_060",
                 "catalogue_columns": list(catalogue_headers),
                 "document_columns": list(document_headers),
             }

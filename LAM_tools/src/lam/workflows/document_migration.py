@@ -7,7 +7,7 @@ from typing import Any
 
 from ..config import Settings
 from ..exceptions import CatalogueError
-from ..models import WorkflowResult
+from ..models import CatalogueChange, WorkflowResult
 from ..services.catalogue_service import CatalogueService
 from ..services.journal_service import OperationJournal
 from ..services.report_service import ReportService, append_change_log
@@ -17,7 +17,7 @@ from .daily_check import DailyCheckWorkflow
 
 
 class DocumentMigrationWorkflow:
-    """Migrate the legacy one-paper/one-PDF workbook to the 0.5.1 dual model."""
+    """Migrate the legacy one-paper/one-PDF workbook to the current dual model."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -117,13 +117,24 @@ class DocumentMigrationWorkflow:
                     "paper_uuid"
                 ]
                 record.values["paper_uuid"] = item["paper_uuid"]
-                from ..models import CatalogueChange
-
                 catalogue.changes.append(
                     CatalogueChange(
                         record.row_number, "paper_uuid", None, item["paper_uuid"]
                     )
                 )
+            semantics = {
+                "record_origin": "pdf" if item["document"] else "legacy",
+                "document_expectation": "required" if item["document"] else "unknown",
+            }
+            for field_name, new_value in semantics.items():
+                old_value = record.get(field_name)
+                column = catalogue.headers[field_name]
+                catalogue.worksheet.cell(row=record.row_number, column=column).value = new_value
+                record.values[field_name] = new_value
+                if old_value != new_value:
+                    catalogue.changes.append(
+                        CatalogueChange(record.row_number, field_name, old_value, new_value)
+                    )
             if item["document"]:
                 catalogue.add_document(item["document"])
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from ..exceptions import CatalogueError
+from ..schema import CATALOGUE_060_FIELDS
 
 
 LEGACY_CATALOGUE_REQUIRED_FIELDS = frozenset(
@@ -26,6 +27,8 @@ LEGACY_CATALOGUE_REQUIRED_FIELDS = frozenset(
 DUAL_CATALOGUE_REQUIRED_FIELDS = frozenset(
     {
         "paper_uuid",
+        "record_origin",
+        "document_expectation",
         "title",
         "authors",
         "year",
@@ -67,6 +70,8 @@ DOCUMENT_REQUIRED_FIELDS = frozenset(
         "date_updated",
     }
 )
+
+DUAL_060_CATALOGUE_REQUIRED_FIELDS = frozenset(CATALOGUE_060_FIELDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +213,10 @@ class CataloguePreflightService:
                 missing_catalogue = DUAL_CATALOGUE_REQUIRED_FIELDS - catalogue_headers
                 documents_headers = cls._headers(workbook["Documents"])
                 missing_documents = DOCUMENT_REQUIRED_FIELDS - documents_headers
+                if not missing_documents and not (
+                    DUAL_060_CATALOGUE_REQUIRED_FIELDS - catalogue_headers
+                ):
+                    return "dual" if not missing_catalogue else "dual_060"
                 if missing_catalogue or missing_documents:
                     parts = []
                     if missing_catalogue:
@@ -246,4 +255,3 @@ class CataloguePreflightService:
             if cell.value is not None and str(cell.value).strip():
                 headers.add(str(cell.value).strip())
         return headers
-

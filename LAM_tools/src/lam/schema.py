@@ -1,4 +1,4 @@
-CATALOGUE_FIELDS = (
+CATALOGUE_060_FIELDS = (
     "paper_uuid",
     "uncertainty",
     "title",
@@ -22,11 +22,27 @@ CATALOGUE_FIELDS = (
     "arxiv_id",
 )
 
+CATALOGUE_FIELDS = (
+    "paper_uuid",
+    "record_origin",
+    "document_expectation",
+    *CATALOGUE_060_FIELDS[1:],
+)
+
 # Public name retained for one release so extensions importing the 0.5.1
 # constant receive the current paper-table schema instead of a stale layout.
 CATALOGUE_052_FIELDS = CATALOGUE_FIELDS
 CATALOGUE_051_FIELDS = CATALOGUE_FIELDS
 RECOMMENDED_FIELDS = CATALOGUE_FIELDS
+
+RECORD_ORIGINS = {
+    "pdf",
+    "reference_text",
+    "provider_import",
+    "recovered",
+    "legacy",
+}
+DOCUMENT_EXPECTATIONS = {"required", "optional", "unknown"}
 
 DOCUMENT_FIELDS = (
     "document_id",
@@ -61,7 +77,7 @@ SUPPLEMENTARY_TYPES = {
 MANAGED_DOCUMENT_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv"}
 
 # Minimal legacy workbook signature used only by the explicit identifier
-# migration. Ordinary workflows require the complete 0.5.2 schema.
+# migration. Ordinary workflows require the complete current schema.
 LEGACY_CATALOGUE_REQUIRED_FIELDS = {
     "title",
     "topic_folder",
@@ -86,6 +102,8 @@ MACHINE_FILLABLE_FIELDS = {
 }
 
 MACHINE_MAINTAINED_FIELDS = {
+    "record_origin",
+    "document_expectation",
     "auto_tags",
     "suggested_topic",
     "source",
@@ -96,9 +114,6 @@ MACHINE_MAINTAINED_FIELDS = {
 
 SYSTEM_IDENTITY_FIELDS = {"paper_uuid"}
 
-SNAPSHOT_FIELDS = (
-    "paper_uuid",
-    "uncertainty",
-    "title",
-    "topic_folder",
-)
+# The complete paper row is retained in the official snapshot so an explicitly
+# authorized recovery can restore the same entity and UUID without inference.
+SNAPSHOT_FIELDS = CATALOGUE_FIELDS

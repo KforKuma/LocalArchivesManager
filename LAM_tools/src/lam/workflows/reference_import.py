@@ -548,6 +548,8 @@ class ReferenceTextImportWorkflow:
     def _new_values(self, metadata: MetadataRecord) -> dict[str, Any]:
         today = date.today().isoformat()
         values = metadata.catalogue_fields()
+        values["record_origin"] = "reference_text"
+        values["document_expectation"] = "optional"
         values["source"] = self._canonical_source(metadata)
         values["date_added"] = today
         values["date_updated"] = today

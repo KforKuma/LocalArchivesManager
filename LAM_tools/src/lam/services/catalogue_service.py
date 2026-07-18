@@ -17,10 +17,12 @@ from ..exceptions import CatalogueError
 from ..models import CatalogueChange, CatalogueRecord, DocumentRecord
 from ..schema import (
     CATALOGUE_FIELDS,
+    DOCUMENT_EXPECTATIONS,
     DOCUMENT_FIELDS,
     DOCUMENT_TYPES,
     MACHINE_FILLABLE_FIELDS,
     MACHINE_MAINTAINED_FIELDS,
+    RECORD_ORIGINS,
     LEGACY_CATALOGUE_REQUIRED_FIELDS,
     SNAPSHOT_FIELDS,
     SYSTEM_IDENTITY_FIELDS,
@@ -90,9 +92,10 @@ class CatalogueService:
                 for sheet in self.workbook.worksheets
             }
             raise CatalogueError(
-                "No worksheet contains a valid 0.5.2 Catalogue schema. "
+                "No worksheet contains a valid 0.6.1 Catalogue schema. "
                 f"required={list(CATALOGUE_FIELDS)}; available={available}. "
-                "Use 'lam migrate identifiers --dry-run' for a legacy workbook."
+                "Use 'lam migrate schema --dry-run' for a 0.6.0 workbook or "
+                "'lam migrate identifiers --dry-run' for a legacy workbook."
             )
         self.worksheet, self.headers = candidates[0]
         self._validate_duplicate_headers()
@@ -109,13 +112,37 @@ class CatalogueService:
             if self.allow_citation_duplicates
             else ("paper_uuid", "doi", "pmid", "arxiv_id")
         )
+        self._validate_record_semantics()
         self._load_documents()
         if not self.allow_legacy_schema and not self.has_documents_sheet:
             raise CatalogueError(
-                "The 0.5.2 Catalogue requires a Documents sheet. "
+                "The 0.6.1 Catalogue requires a Documents sheet. "
                 "Run 'lam migrate identifiers --dry-run' first."
             )
         return self.records
+
+    def _validate_record_semantics(self) -> None:
+        """Reject explicit invalid 0.6.1 provenance values while tolerating blanks.
+
+        Blanks remain readable so migration and recovery diagnostics can report
+        incomplete historical rows instead of making the workbook inaccessible.
+        """
+
+        problems: list[str] = []
+        for record in self.records:
+            origin = str(record.get("record_origin") or "").strip()
+            expectation = str(record.get("document_expectation") or "").strip()
+            if origin and origin not in RECORD_ORIGINS:
+                problems.append(
+                    f"Catalogue row {record.row_number}: invalid record_origin={origin!r}"
+                )
+            if expectation and expectation not in DOCUMENT_EXPECTATIONS:
+                problems.append(
+                    "Catalogue row "
+                    f"{record.row_number}: invalid document_expectation={expectation!r}"
+                )
+        if problems:
+            raise CatalogueError("; ".join(problems))
 
     @property
     def has_documents_sheet(self) -> bool:
@@ -640,6 +667,8 @@ class CatalogueService:
             raise CatalogueError("Catalogue must be loaded before a row can be added")
         normalized_values = dict(values)
         normalized_values.setdefault("paper_uuid", str(uuid.uuid4()))
+        normalized_values.setdefault("record_origin", "provider_import")
+        normalized_values.setdefault("document_expectation", "optional")
         if "publication_type" in normalized_values:
             normalized_values["publication_type"] = canonicalize_publication_type(
                 normalized_values["publication_type"]
@@ -672,6 +701,78 @@ class CatalogueService:
         record = CatalogueRecord(row_number=row_number, values=record_values)
         self.records.append(record)
         self.changes.append(CatalogueChange(row_number, "__row__", None, supplied))
+        return record
+
+    def delete_paper_entity(
+        self, paper_uuid: object
+    ) -> tuple[CatalogueRecord, list[DocumentRecord]]:
+        """Remove one paper row and all child Documents from the in-memory workbook."""
+
+        if self.worksheet is None or self.documents_worksheet is None:
+            raise CatalogueError("Catalogue and Documents must be loaded before deletion")
+        matches = self.find_by("paper_uuid", paper_uuid)
+        if len(matches) != 1:
+            raise CatalogueError(
+                f"paper_uuid must identify exactly one Catalogue row: {paper_uuid!r}"
+            )
+        record = matches[0]
+        documents = list(self.documents_for_paper(paper_uuid))
+        for document in sorted(documents, key=lambda item: item.row_number, reverse=True):
+            self.documents_worksheet.delete_rows(document.row_number, 1)
+            self.document_changes.append(
+                CatalogueChange(
+                    document.row_number,
+                    "__row__",
+                    dict(document.values),
+                    None,
+                )
+            )
+        self.worksheet.delete_rows(record.row_number, 1)
+        self.changes.append(
+            CatalogueChange(record.row_number, "__row__", dict(record.values), None)
+        )
+        self.records = [item for item in self.records if item is not record]
+        self.documents = [item for item in self.documents if item not in documents]
+        self.mark_schema_dirty()
+        return record, documents
+
+    def restore_paper_entity(
+        self,
+        catalogue_values: dict[str, Any],
+        document_values: list[dict[str, Any]],
+    ) -> CatalogueRecord:
+        """Append an exact trashed entity while preserving UUID and user fields."""
+
+        if self.worksheet is None or self.documents_worksheet is None:
+            raise CatalogueError("Catalogue and Documents must be loaded before recovery")
+        paper_uuid = str(catalogue_values.get("paper_uuid") or "").strip()
+        if not paper_uuid or self.find_by("paper_uuid", paper_uuid):
+            raise CatalogueError(f"Cannot restore duplicate paper_uuid: {paper_uuid!r}")
+        unsupported = sorted(set(catalogue_values) - set(self.headers))
+        if unsupported:
+            raise CatalogueError(
+                f"Trash record contains unsupported Catalogue fields: {unsupported}"
+            )
+        existing_document_ids = {
+            normalized_text(item.get("document_id")) for item in self.documents
+        }
+        for values in document_values:
+            document_id = normalized_text(values.get("document_id"))
+            if not document_id or document_id in existing_document_ids:
+                raise CatalogueError(
+                    f"Cannot restore duplicate/blank document_id: {values.get('document_id')!r}"
+                )
+            existing_document_ids.add(document_id)
+        row_number = self.worksheet.max_row + 1
+        for field_name, column in self.headers.items():
+            self.worksheet.cell(row=row_number, column=column).value = catalogue_values.get(
+                field_name
+            )
+        record = CatalogueRecord(row_number, dict(catalogue_values))
+        self.records.append(record)
+        self.changes.append(CatalogueChange(row_number, "__row__", None, dict(catalogue_values)))
+        for values in document_values:
+            self.add_document(values)
         return record
 
     def repair_publication_type(

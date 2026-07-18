@@ -25,10 +25,15 @@ _LOCAL_UUID = re.compile(
     r"^LOCAL:([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
     re.IGNORECASE,
 )
+_UNKNOWN_EXPECTATION_REVIEW = (
+    "NEEDS_REVIEW: field=document_expectation; "
+    "issue_key=legacy_document_expectation_unknown; "
+    "issue=No Documents row establishes whether a managed document is expected."
+)
 
 
 class IdentifierMigrationWorkflow:
-    """Migrate a legacy workbook to the strict 0.5.2 paper/document schema."""
+    """Migrate a legacy workbook to the strict current paper/document schema."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -328,6 +333,14 @@ class IdentifierMigrationWorkflow:
                 "date_added": str(record.get("date_added") or today),
                 "date_updated": today,
             }
+        for item in plan:
+            has_document = item["document"] is not None or any(
+                normalized_text(document.get("paper_uuid"))
+                == normalized_text(item["paper_uuid"])
+                for document in catalogue.documents
+            )
+            item["record_origin"] = "pdf" if has_document else "legacy"
+            item["document_expectation"] = "required" if has_document else "unknown"
         return plan, blockers
 
     def _apply(
@@ -354,6 +367,37 @@ class IdentifierMigrationWorkflow:
                 catalogue.changes.append(
                     CatalogueChange(record.row_number, "paper_uuid", old, item["paper_uuid"])
                 )
+            for field_name in ("record_origin", "document_expectation"):
+                old_value = record.get(field_name)
+                new_value = item[field_name]
+                column = catalogue.headers[field_name]
+                catalogue.worksheet.cell(row=record.row_number, column=column).value = new_value
+                record.values[field_name] = new_value
+                if old_value != new_value:
+                    catalogue.changes.append(
+                        CatalogueChange(record.row_number, field_name, old_value, new_value)
+                    )
+            if item["document_expectation"] == "unknown":
+                old_uncertainty = str(record.get("uncertainty") or "").strip()
+                if "issue_key=legacy_document_expectation_unknown" not in old_uncertainty:
+                    new_uncertainty = "\n".join(
+                        value
+                        for value in (old_uncertainty, _UNKNOWN_EXPECTATION_REVIEW)
+                        if value
+                    )
+                    column = catalogue.headers["uncertainty"]
+                    catalogue.worksheet.cell(row=record.row_number, column=column).value = (
+                        new_uncertainty
+                    )
+                    record.values["uncertainty"] = new_uncertainty
+                    catalogue.changes.append(
+                        CatalogueChange(
+                            record.row_number,
+                            "uncertainty",
+                            old_uncertainty,
+                            new_uncertainty,
+                        )
+                    )
             if item["document"]:
                 catalogue.add_document(item["document"])
 
@@ -492,6 +536,8 @@ class IdentifierMigrationWorkflow:
             "paper_uuid_source": item["uuid_source"],
             "would_create_document": item["document"] is not None,
             "legacy_document_resolution": item.get("legacy_document_resolution") or None,
+            "record_origin": item.get("record_origin"),
+            "document_expectation": item.get("document_expectation"),
         }
 
     @staticmethod

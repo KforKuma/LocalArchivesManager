@@ -673,6 +673,8 @@ class InboxRegisterWorkflow:
         today = date.today().isoformat()
         values = {
             **metadata.catalogue_fields(),
+            "record_origin": "pdf",
+            "document_expectation": "required",
             "date_added": today,
             "date_updated": today,
         }

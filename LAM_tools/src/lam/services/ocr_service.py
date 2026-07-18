@@ -928,6 +928,19 @@ class OcrService:
         cached = type(self)._easyocr_import_available
         if cached is not None:
             return cached
+        # A frozen executable cannot use ``sys.executable -c`` because
+        # sys.executable points to lam.exe rather than a Python interpreter.
+        # PyInstaller has already isolated the bundled runtime, so import the
+        # collected module in-process for this diagnostic probe.
+        if getattr(sys, "frozen", False):
+            try:
+                import easyocr  # noqa: F401
+            except Exception:
+                available = False
+            else:
+                available = True
+            type(self)._easyocr_import_available = available
+            return available
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             completed = subprocess.run(

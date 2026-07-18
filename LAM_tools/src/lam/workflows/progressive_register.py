@@ -1485,6 +1485,8 @@ class ProgressiveInboxRegisterWorkflow:
         )
         values = {
             "paper_uuid": str(uuid.uuid4()),
+            "record_origin": "pdf",
+            "document_expectation": "required",
             "title": str(local.get("title") or title),
             "authors": (
                 "; ".join(local.get("authors") or ())

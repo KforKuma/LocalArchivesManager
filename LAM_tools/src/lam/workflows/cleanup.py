@@ -72,14 +72,23 @@ class CleanupWorkflow:
         self.plan_issues: list[dict[str, Any]] = []
 
     def run(
-        self, *, dry_run: bool, include_test_artifacts: bool = False
+        self,
+        *,
+        dry_run: bool,
+        include_test_artifacts: bool = False,
+        purge_trash: bool = False,
+        older_than: str = "30d",
     ) -> WorkflowResult:
         result = WorkflowResult(
             "cleanup",
             dry_run=dry_run,
             mode="dry_run" if dry_run else "apply",
         )
-        candidates = self.plan(include_test_artifacts=include_test_artifacts)
+        candidates = self.plan(
+            include_test_artifacts=include_test_artifacts,
+            purge_trash=purge_trash,
+            older_than=older_than,
+        )
         result.skipped.extend(self.plan_issues)
         result.counts = {
             "planned_entries": len(candidates),
@@ -154,7 +163,13 @@ class CleanupWorkflow:
         ReportService(self.settings.reports_dir).write(result)
         return result
 
-    def plan(self, *, include_test_artifacts: bool = False) -> list[CleanupCandidate]:
+    def plan(
+        self,
+        *,
+        include_test_artifacts: bool = False,
+        purge_trash: bool = False,
+        older_than: str = "30d",
+    ) -> list[CleanupCandidate]:
         self.plan_issues = []
         now = datetime.now(timezone.utc)
         candidates: list[CleanupCandidate] = []
@@ -169,10 +184,52 @@ class CleanupWorkflow:
         candidates.extend(self._metadata_cache_candidates(now))
         candidates.extend(self._citation_export_cache_candidates(now))
         candidates.extend(self._snapshot_generation_candidates())
+        if purge_trash:
+            candidates.extend(self._trash_candidates(now, older_than))
         unique: dict[Path, CleanupCandidate] = {}
         for item in candidates:
             unique[item.path.resolve()] = item
         return sorted(unique.values(), key=lambda item: item.path.as_posix().casefold())
+
+    def _trash_candidates(
+        self, now: datetime, older_than: str
+    ) -> list[CleanupCandidate]:
+        match = re.fullmatch(r"([1-9]\d*)d", older_than.strip().casefold())
+        if not match:
+            raise FileOperationError("--older-than must use a positive day value such as 30d")
+        cutoff = now - timedelta(days=int(match.group(1)))
+        trash = self.settings.state_dir / "trash"
+        if not trash.is_dir():
+            return []
+        results = []
+        for path in trash.iterdir():
+            if not path.is_dir() or path.name == "tombstones":
+                continue
+            try:
+                manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+                deleted_at = datetime.fromisoformat(str(manifest["deleted_at"]))
+                if deleted_at.tzinfo is None:
+                    deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+            except (OSError, ValueError, KeyError, TypeError):
+                self.plan_issues.append(
+                    {"path": path.relative_to(self.root).as_posix(), "issue": "trash_manifest_invalid"}
+                )
+                continue
+            if manifest.get("status") not in {"committed", "recovered"} or deleted_at >= cutoff:
+                continue
+            self._assert_trash_content(path)
+            size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+            count = sum(1 for item in path.rglob("*") if item.is_file())
+            results.append(
+                CleanupCandidate(
+                    path.resolve(),
+                    "trash_entry",
+                    f"trash_entry_older_than_{older_than}",
+                    size,
+                    count,
+                )
+            )
+        return results
 
     def _backup_candidates(self, now: datetime) -> list[CleanupCandidate]:
         backups = sorted(
@@ -607,7 +664,10 @@ class CleanupWorkflow:
         path = candidate.path
         if not path.exists():
             return
-        self._assert_safe_content(path)
+        if candidate.kind == "trash_entry":
+            self._assert_trash_content(path)
+        else:
+            self._assert_safe_content(path)
         if path.is_file():
             path.unlink()
             return
@@ -618,6 +678,20 @@ class CleanupWorkflow:
             elif child.is_dir():
                 child.rmdir()
         path.rmdir()
+
+    def _assert_trash_content(self, path: Path) -> None:
+        trash_root = (self.settings.state_dir / "trash").resolve()
+        try:
+            relative = path.resolve().relative_to(trash_root)
+        except ValueError as exc:
+            raise FileOperationError(f"Trash purge path escapes trash root: {path}") from exc
+        if len(relative.parts) != 1 or path.name == "tombstones":
+            raise FileOperationError(f"Trash purge requires one deletion directory: {path}")
+        for item in (path, *path.rglob("*")):
+            if item.is_symlink() or self._is_reparse_point(item):
+                raise FileOperationError(
+                    f"Trash purge refuses symlinks or reparse points: {item}"
+                )
 
     def _assert_allowed_candidate(self, candidate: CleanupCandidate) -> None:
         path = candidate.path.resolve()
@@ -642,6 +716,7 @@ class CleanupWorkflow:
             "citation_export_cache": self.settings.citation_export_cache_dir.resolve(),
             "citation_export_temporary": self.settings.zotero_exports_dir.resolve(),
             "snapshot_generation": (self.settings.state_dir / "snapshot_generations").resolve(),
+            "trash_entry": (self.settings.state_dir / "trash").resolve(),
         }
         allowed = allowed_roots.get(candidate.kind)
         if allowed is None:

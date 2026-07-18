@@ -21,6 +21,7 @@ from ..utils.publication_type import canonicalize_publication_type
 from .daily_check import DailyCheckWorkflow
 from .inbox_register import InboxRegisterWorkflow
 from .publication_type_repair import PublicationTypeRepairWorkflow
+from .trash_recovery import TrashRecoveryWorkflow
 
 
 class RecoveryWorkflow:
@@ -39,7 +40,16 @@ class RecoveryWorkflow:
         offline: bool = False,
         refresh: bool = False,
         cache_write: bool = True,
+        list_trash: bool = False,
+        trash_id: str | None = None,
     ) -> WorkflowResult:
+        if list_trash:
+            return TrashRecoveryWorkflow(self.settings).list()
+        if trash_id:
+            return TrashRecoveryWorkflow(self.settings).run(
+                deletion_id=trash_id,
+                dry_run=dry_run,
+            )
         result = WorkflowResult(
             "recover",
             dry_run=dry_run,

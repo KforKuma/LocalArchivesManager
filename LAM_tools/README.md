@@ -1,6 +1,7 @@
 # LAM — Local Archives Manager
 
-This directory is the standalone source root for LAM 0.6.0 development. It is
+This directory is the standalone source root for LAM 0.6.1 development. The
+official source and frozen build baseline is Python 3.14. It is
 deliberately separate from the user literature library and must never contain
 `catalogue.xlsx`, managed documents, `.library_state`, or local credentials.
 
@@ -9,6 +10,7 @@ deliberately separate from the user literature library and must never contain
 ```powershell
 conda env create -f environment.yml
 conda activate lam-dev
+python --version  # Python 3.14.x
 python -m lam --version
 lam commands --json
 ```
