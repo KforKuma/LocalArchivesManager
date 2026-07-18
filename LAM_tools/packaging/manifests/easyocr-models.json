@@ -1,0 +1,34 @@
+{
+  "schema_version": "1",
+  "asset": "easyocr-models",
+  "easyocr_version": "1.7.2",
+  "languages": [
+    "en"
+  ],
+  "download_enabled": false,
+  "default_git_tracking": false,
+  "models": [
+    {
+      "role": "detection",
+      "language": "multilingual",
+      "filename": "craft_mlt_25k.pth",
+      "md5": "2f8227d2def4037cdb3b34389dcf9ec1",
+      "source": "https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip",
+      "license": "Apache-2.0",
+      "size_bytes": 83152330,
+      "sha256": "4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17",
+      "license_source": "https://github.com/JaidedAI/EasyOCR/blob/master/LICENSE"
+    },
+    {
+      "role": "recognition",
+      "language": "en",
+      "filename": "english_g2.pth",
+      "md5": "5864788e1821be9e454ec108d61b887d",
+      "source": "https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/english_g2.zip",
+      "license": "Apache-2.0",
+      "size_bytes": 15143997,
+      "sha256": "e2272681d9d67a04e2dff396b6e95077bc19001f8f6d3593c307b9852e1c29e8",
+      "license_source": "https://github.com/JaidedAI/EasyOCR/blob/master/LICENSE"
+    }
+  ]
+}

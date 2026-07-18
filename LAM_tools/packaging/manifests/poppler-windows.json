@@ -1,0 +1,1511 @@
+{
+  "schema_version": "1",
+  "asset": "poppler-windows",
+  "platform": "windows-x64",
+  "poppler_version": "26.07.0",
+  "source": "https://anaconda.org/conda-forge/poppler/26.07.0/download/win-64/poppler-26.07.0-h6618ce5_3.conda",
+  "license": "GPL-2.0-or-later",
+  "default_git_tracking": false,
+  "packages": [
+    {
+      "name": "bzip2",
+      "version": "1.0.8",
+      "build": "h0ad9c76_9",
+      "license": "bzip2-1.0.6",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/bzip2/1.0.8/download/win-64/bzip2-1.0.8-h0ad9c76_9.conda"
+    },
+    {
+      "name": "ca-certificates",
+      "version": "2026.6.17",
+      "build": "h4c7d964_0",
+      "license": "ISC",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/ca-certificates/2026.6.17/download/noarch/ca-certificates-2026.6.17-h4c7d964_0.conda"
+    },
+    {
+      "name": "cairo",
+      "version": "1.18.4",
+      "build": "h477c42c_1",
+      "license": "LGPL-2.1-only or MPL-1.1",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/cairo/1.18.4/download/win-64/cairo-1.18.4-h477c42c_1.conda"
+    },
+    {
+      "name": "font-ttf-dejavu-sans-mono",
+      "version": "2.37",
+      "build": "hab24e00_0",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/font-ttf-dejavu-sans-mono/2.37/download/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.conda"
+    },
+    {
+      "name": "font-ttf-inconsolata",
+      "version": "3.000",
+      "build": "h77eed37_0",
+      "license": "OFL-1.1",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/font-ttf-inconsolata/3.000/download/noarch/font-ttf-inconsolata-3.000-h77eed37_0.conda"
+    },
+    {
+      "name": "font-ttf-source-code-pro",
+      "version": "2.038",
+      "build": "h77eed37_0",
+      "license": "OFL-1.1",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/font-ttf-source-code-pro/2.038/download/noarch/font-ttf-source-code-pro-2.038-h77eed37_0.conda"
+    },
+    {
+      "name": "font-ttf-ubuntu",
+      "version": "0.83",
+      "build": "h77eed37_3",
+      "license": "LicenseRef-Ubuntu-Font-Licence-Version-1.0",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/font-ttf-ubuntu/0.83/download/noarch/font-ttf-ubuntu-0.83-h77eed37_3.conda"
+    },
+    {
+      "name": "fontconfig",
+      "version": "2.18.1",
+      "build": "hd47e2ca_0",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/fontconfig/2.18.1/download/win-64/fontconfig-2.18.1-hd47e2ca_0.conda"
+    },
+    {
+      "name": "fonts-conda-ecosystem",
+      "version": "1",
+      "build": "0",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/fonts-conda-ecosystem/1/download/noarch/fonts-conda-ecosystem-1-0.conda"
+    },
+    {
+      "name": "fonts-conda-forge",
+      "version": "1",
+      "build": "hc364b38_1",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/fonts-conda-forge/1/download/noarch/fonts-conda-forge-1-hc364b38_1.conda"
+    },
+    {
+      "name": "icu",
+      "version": "78.3",
+      "build": "h637d24d_0",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/icu/78.3/download/win-64/icu-78.3-h637d24d_0.conda"
+    },
+    {
+      "name": "krb5",
+      "version": "1.22.2",
+      "build": "h719d79b_1",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/krb5/1.22.2/download/win-64/krb5-1.22.2-h719d79b_1.conda"
+    },
+    {
+      "name": "lcms2",
+      "version": "2.19.1",
+      "build": "hf2c6c5f_1",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/lcms2/2.19.1/download/win-64/lcms2-2.19.1-hf2c6c5f_1.conda"
+    },
+    {
+      "name": "lerc",
+      "version": "4.1.0",
+      "build": "hd936e49_0",
+      "license": "Apache-2.0",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/lerc/4.1.0/download/win-64/lerc-4.1.0-hd936e49_0.conda"
+    },
+    {
+      "name": "libcurl",
+      "version": "8.21.0",
+      "build": "h51a1c48_2",
+      "license": "curl",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libcurl/8.21.0/download/win-64/libcurl-8.21.0-h51a1c48_2.conda"
+    },
+    {
+      "name": "libdeflate",
+      "version": "1.25",
+      "build": "h51727cc_0",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libdeflate/1.25/download/win-64/libdeflate-1.25-h51727cc_0.conda"
+    },
+    {
+      "name": "libexpat",
+      "version": "2.8.1",
+      "build": "hac47afa_1",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libexpat/2.8.1/download/win-64/libexpat-2.8.1-hac47afa_1.conda"
+    },
+    {
+      "name": "libffi",
+      "version": "3.5.2",
+      "build": "h3d046cb_0",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libffi/3.5.2/download/win-64/libffi-3.5.2-h3d046cb_0.conda"
+    },
+    {
+      "name": "libfreetype",
+      "version": "2.14.3",
+      "build": "h57928b3_1",
+      "license": "GPL-2.0-only OR FTL",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libfreetype/2.14.3/download/win-64/libfreetype-2.14.3-h57928b3_1.conda"
+    },
+    {
+      "name": "libfreetype6",
+      "version": "2.14.3",
+      "build": "hdbac1cb_1",
+      "license": "GPL-2.0-only OR FTL",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libfreetype6/2.14.3/download/win-64/libfreetype6-2.14.3-hdbac1cb_1.conda"
+    },
+    {
+      "name": "libglib",
+      "version": "2.88.2",
+      "build": "h7ce1215_0",
+      "license": "LGPL-2.1-or-later",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libglib/2.88.2/download/win-64/libglib-2.88.2-h7ce1215_0.conda"
+    },
+    {
+      "name": "libiconv",
+      "version": "1.18",
+      "build": "hc1393d2_2",
+      "license": "LGPL-2.1-only",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libiconv/1.18/download/win-64/libiconv-1.18-hc1393d2_2.conda"
+    },
+    {
+      "name": "libintl",
+      "version": "0.22.5",
+      "build": "h5728263_3",
+      "license": "LGPL-2.1-or-later",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libintl/0.22.5/download/win-64/libintl-0.22.5-h5728263_3.conda"
+    },
+    {
+      "name": "libjpeg-turbo",
+      "version": "3.2.0",
+      "build": "hfd05255_0",
+      "license": "IJG AND BSD-3-Clause AND Zlib",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libjpeg-turbo/3.2.0/download/win-64/libjpeg-turbo-3.2.0-hfd05255_0.conda"
+    },
+    {
+      "name": "liblzma",
+      "version": "5.8.3",
+      "build": "hfd05255_0",
+      "license": "0BSD",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/liblzma/5.8.3/download/win-64/liblzma-5.8.3-hfd05255_0.conda"
+    },
+    {
+      "name": "libpng",
+      "version": "1.6.58",
+      "build": "h7351971_0",
+      "license": "zlib-acknowledgement",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libpng/1.6.58/download/win-64/libpng-1.6.58-h7351971_0.conda"
+    },
+    {
+      "name": "libpsl",
+      "version": "0.22.0",
+      "build": "h25e0afd_1",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libpsl/0.22.0/download/win-64/libpsl-0.22.0-h25e0afd_1.conda"
+    },
+    {
+      "name": "libssh2",
+      "version": "1.11.1",
+      "build": "h9aa295b_0",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libssh2/1.11.1/download/win-64/libssh2-1.11.1-h9aa295b_0.conda"
+    },
+    {
+      "name": "libtiff",
+      "version": "4.7.2",
+      "build": "h8f73337_0",
+      "license": "HPND",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libtiff/4.7.2/download/win-64/libtiff-4.7.2-h8f73337_0.conda"
+    },
+    {
+      "name": "libzlib",
+      "version": "1.3.2",
+      "build": "hfd05255_2",
+      "license": "Zlib",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/libzlib/1.3.2/download/win-64/libzlib-1.3.2-hfd05255_2.conda"
+    },
+    {
+      "name": "openjpeg",
+      "version": "2.5.4",
+      "build": "h0e57b4f_0",
+      "license": "BSD-2-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/openjpeg/2.5.4/download/win-64/openjpeg-2.5.4-h0e57b4f_0.conda"
+    },
+    {
+      "name": "openssl",
+      "version": "3.6.3",
+      "build": "hf411b9b_0",
+      "license": "Apache-2.0",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/openssl/3.6.3/download/win-64/openssl-3.6.3-hf411b9b_0.conda"
+    },
+    {
+      "name": "pcre2",
+      "version": "10.47",
+      "build": "hd2b5f0e_0",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/pcre2/10.47/download/win-64/pcre2-10.47-hd2b5f0e_0.conda"
+    },
+    {
+      "name": "pixman",
+      "version": "0.46.4",
+      "build": "h5112557_2",
+      "license": "MIT",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/pixman/0.46.4/download/win-64/pixman-0.46.4-h5112557_2.conda"
+    },
+    {
+      "name": "poppler",
+      "version": "26.07.0",
+      "build": "h6618ce5_3",
+      "license": "GPL-2.0-or-later",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/poppler/26.07.0/download/win-64/poppler-26.07.0-h6618ce5_3.conda"
+    },
+    {
+      "name": "poppler-data",
+      "version": "0.4.12",
+      "build": "hd8ed1ab_0",
+      "license": "BSD-3-Clause AND (GPL-2.0-only OR GPL-3.0-only)",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/poppler-data/0.4.12/download/noarch/poppler-data-0.4.12-hd8ed1ab_0.conda"
+    },
+    {
+      "name": "ucrt",
+      "version": "10.0.26100.0",
+      "build": "h57928b3_0",
+      "license": "LicenseRef-MicrosoftWindowsSDK10",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/ucrt/10.0.26100.0/download/win-64/ucrt-10.0.26100.0-h57928b3_0.conda"
+    },
+    {
+      "name": "vc",
+      "version": "14.5",
+      "build": "h1b7c187_39",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/vc/14.5/download/win-64/vc-14.5-h1b7c187_39.conda"
+    },
+    {
+      "name": "vc14_runtime",
+      "version": "14.51.36231",
+      "build": "h1b9f54f_39",
+      "license": "LicenseRef-MicrosoftVisualCpp2015-2022Runtime",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/vc14_runtime/14.51.36231/download/win-64/vc14_runtime-14.51.36231-h1b9f54f_39.conda"
+    },
+    {
+      "name": "vcomp14",
+      "version": "14.51.36231",
+      "build": "h1b9f54f_39",
+      "license": "LicenseRef-MicrosoftVisualCpp2015-2022Runtime",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/vcomp14/14.51.36231/download/win-64/vcomp14-14.51.36231-h1b9f54f_39.conda"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7",
+      "build": "h534d264_6",
+      "license": "BSD-3-Clause",
+      "channel": "conda-forge",
+      "url": "https://anaconda.org/conda-forge/zstd/1.5.7/download/win-64/zstd-1.5.7-h534d264_6.conda"
+    }
+  ],
+  "files": [
+    {
+      "path": "bin/api-ms-win-core-console-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "015bd08815c7b934a8952c3a7578e9ce59f21136e8a880d42bbd414bec2c6058"
+    },
+    {
+      "path": "bin/api-ms-win-core-console-l1-2-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "dcb4b82b6177fae57fdf0f3e05ab62ff75e05560b54547c16d6a1d83b33e07d4"
+    },
+    {
+      "path": "bin/api-ms-win-core-datetime-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "5534812cdbdae94ba45cb216e5eb9af686b853948df54365103555abbbaf9d9a"
+    },
+    {
+      "path": "bin/api-ms-win-core-debug-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "837d2b1b2cd03e03fc6ccb050698b6b5763af17c201304872342a5eae9e0a2d2"
+    },
+    {
+      "path": "bin/api-ms-win-core-errorhandling-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "de43b165f568c276c00e95acd454e3092f352a18e95874595f4f4658c06d2ec7"
+    },
+    {
+      "path": "bin/api-ms-win-core-fibers-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "3cebc45bf479ad74cfabf2c6bfd4994d7ad639ed1221025981d19cedf9ce0416"
+    },
+    {
+      "path": "bin/api-ms-win-core-fibers-l1-1-1.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "5ef70308bcca628ce6b0e2856b15b1c7ae340c3f9bbbc4c1071d8c191a34a5c3"
+    },
+    {
+      "path": "bin/api-ms-win-core-file-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 27008,
+      "sha256": "250ac829f2617bcac1c6e5b8c4f630462e20765863ba573526a3e11bbfb94a9a"
+    },
+    {
+      "path": "bin/api-ms-win-core-file-l1-2-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22888,
+      "sha256": "ae14079a114733f60ce87b92cba42acd8083c2cd67594e53bc37dc0b97a4b465"
+    },
+    {
+      "path": "bin/api-ms-win-core-file-l2-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22912,
+      "sha256": "914bf26a298713119477ea0a8e7bd43171b91344ebe24fb47ad77c49686e3d87"
+    },
+    {
+      "path": "bin/api-ms-win-core-handle-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "ab5489955e371b15f77906c08ec3c7affe2c7a46a08c514ca628768b4478974b"
+    },
+    {
+      "path": "bin/api-ms-win-core-heap-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "c70f9644d8377fa39c5b71f2e9734c1400d7598904fdeb772e8502099982dcb7"
+    },
+    {
+      "path": "bin/api-ms-win-core-interlocked-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22888,
+      "sha256": "f8129710188e407bb0e6f46d30aeba277d67b947ece5fe09e883fde2323f3ae6"
+    },
+    {
+      "path": "bin/api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22888,
+      "sha256": "5200b16cb2ddc61cfc07373a9a84aa85a3ab50806ca96c879c883275832944c1"
+    },
+    {
+      "path": "bin/api-ms-win-core-libraryloader-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "48786fb88b001dcd1f63acea903d3ca9cc0b3060d5a325e3f2f3cbc3bfd53166"
+    },
+    {
+      "path": "bin/api-ms-win-core-localization-l1-2-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "9ec3898f7eba91faa28b51616c211a2689e3a13aeef8de6e13cb674e49d689eb"
+    },
+    {
+      "path": "bin/api-ms-win-core-memory-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "3a6cbc524c99e1cd80d5368f5601402a37ad602528b1ab628093573ef638eb3b"
+    },
+    {
+      "path": "bin/api-ms-win-core-namedpipe-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22888,
+      "sha256": "97145ef89c44949fcf0f04ac834a8bc7d687ef49ee73ae9fc32f3c11136b7201"
+    },
+    {
+      "path": "bin/api-ms-win-core-processenvironment-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "8bc7c10b1851aea644e9c9f381cdb935e091fee6b0be3d3aedc6fffaac96adb7"
+    },
+    {
+      "path": "bin/api-ms-win-core-processthreads-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22912,
+      "sha256": "d8030b777617c71f0f94564607699dbf7561487d779db9756aed378c5675213f"
+    },
+    {
+      "path": "bin/api-ms-win-core-processthreads-l1-1-1.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "f5e676713340f73a03a3d41a6ec9883b431da7d16c7f07bd0a920fb80e6c0753"
+    },
+    {
+      "path": "bin/api-ms-win-core-profile-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "f023d47e44d3eea6b0743580f57e8c6ba81e79d5ebfa7da26250076c647b980e"
+    },
+    {
+      "path": "bin/api-ms-win-core-rtlsupport-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22888,
+      "sha256": "9746d8930704153578a628c010638a5f818ffe5a927e25591b108e256dc6afca"
+    },
+    {
+      "path": "bin/api-ms-win-core-string-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "7c53ae24c982d16ffd1bf7f918d115b11b7f30e57bc7feaa18cb9781e4abb926"
+    },
+    {
+      "path": "bin/api-ms-win-core-synch-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "56d9d62ca5dba79a6581b8d574a7d8b2a64a5ecb71e47dcf06ed0285708b1859"
+    },
+    {
+      "path": "bin/api-ms-win-core-synch-l1-2-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22888,
+      "sha256": "f6482bbec5612c39ecb4822787a333f2b7570f7a5f922a4059be41ba957bb372"
+    },
+    {
+      "path": "bin/api-ms-win-core-sysinfo-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "272d02765fdd3582618236c2d309abba069642f9bc1062ede069d0c144e17007"
+    },
+    {
+      "path": "bin/api-ms-win-core-sysinfo-l1-2-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22912,
+      "sha256": "8a0900788859d0eb51c2f48f50cc6ed376a120b518100fa20e11d7702ccde260"
+    },
+    {
+      "path": "bin/api-ms-win-core-timezone-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "ff35de6c03812b332e140f17dade25c5dd4775156da9eeb1eaae3fddd27236ec"
+    },
+    {
+      "path": "bin/api-ms-win-core-util-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "191ef3e98641a57296f19d572d8eb62489470ff1ef6030d136af170c2f835173"
+    },
+    {
+      "path": "bin/api-ms-win-crt-conio-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "54ee5ec719a051496ff60aa00dbeaa94b9a7d2cdac27fe9b7317f1a666b6a2aa"
+    },
+    {
+      "path": "bin/api-ms-win-crt-convert-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 26992,
+      "sha256": "8b94662429171019fcd63c70bbf2095a075170599704a5e7dcdbe3da13f3a429"
+    },
+    {
+      "path": "bin/api-ms-win-crt-environment-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22912,
+      "sha256": "39e5929593709e8af3bc9e0a75ec1155778d6f4a247f4cdfc58928ad6db88434"
+    },
+    {
+      "path": "bin/api-ms-win-crt-filesystem-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "5a8ecebac32edf4e1f3c5c6c1c8ea1a1add6cda4f9c9cb26f752fb295bea6865"
+    },
+    {
+      "path": "bin/api-ms-win-crt-heap-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22872,
+      "sha256": "c71080cbcb43bf1f8f3e391deb12a582eb0abefc80946f340675a2c616e4feb4"
+    },
+    {
+      "path": "bin/api-ms-win-crt-locale-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "6c68648e524187e03c4ad9aaa4a99113c6ee9f29fb39cc0ed93f951975138e63"
+    },
+    {
+      "path": "bin/api-ms-win-crt-math-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 31064,
+      "sha256": "d4fbcccbe29371cbce431e43b2eb4f7ba9a6f04a3d740a071f02457a505e9dc8"
+    },
+    {
+      "path": "bin/api-ms-win-crt-multibyte-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 31064,
+      "sha256": "41b98a59bea1c86ab3b2357acb77de4eae7ff1132f130b1d9669ab9c2b456a2a"
+    },
+    {
+      "path": "bin/api-ms-win-crt-private-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 76120,
+      "sha256": "29bf3d90617d3781d19b332d6ceb9f20ba5ce082ec74bf6c34d5d4aee56e48a1"
+    },
+    {
+      "path": "bin/api-ms-win-crt-process-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22896,
+      "sha256": "47c1935942e3ac0812e4dcf18c0e265e565f0194a3349111c299712f5565f7ac"
+    },
+    {
+      "path": "bin/api-ms-win-crt-runtime-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 26968,
+      "sha256": "72adc1b3677e0814d9c4ebf0964000e84bb2acf67336c8963061665e44f78029"
+    },
+    {
+      "path": "bin/api-ms-win-crt-stdio-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 26968,
+      "sha256": "900afc3989673c9bb1a687ed38c192f46db9e6ba6d11a668898a539e7fc23798"
+    },
+    {
+      "path": "bin/api-ms-win-crt-string-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 26968,
+      "sha256": "fcf12466cc12fd3b73611fc0763a5a1f9d44e90349513c34a0c83b0f36421793"
+    },
+    {
+      "path": "bin/api-ms-win-crt-time-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22912,
+      "sha256": "886e57c4a6adb299b38f02945369f590a67da4e79a798359fc60aaa067212d7c"
+    },
+    {
+      "path": "bin/api-ms-win-crt-utility-l1-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 22912,
+      "sha256": "5f8f26b216ade615b67a41f6fbbb910972fc6153315a65bb8f09912be50215b1"
+    },
+    {
+      "path": "bin/cairo-gobject.dll",
+      "role": "runtime_dll",
+      "size_bytes": 28160,
+      "sha256": "807bcd54731473a0a6441e7515203e1d3d4ba2676f285473858abd56788d05ea"
+    },
+    {
+      "path": "bin/cairo-script-interpreter.dll",
+      "role": "runtime_dll",
+      "size_bytes": 136704,
+      "sha256": "9fa86e79a41db036895213a53c105c0df6949a9f255f68ec2fdbab22b59be791"
+    },
+    {
+      "path": "bin/cairo.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1040896,
+      "sha256": "b13e3b0d401d73a38f9aa7228d723dae2d4c8f3fd7216c3442ee2c22d873b54a"
+    },
+    {
+      "path": "bin/charset.dll",
+      "role": "runtime_dll",
+      "size_bytes": 12800,
+      "sha256": "c2e0e0c3746cd0adea79cd97ca45d5ae0a4b1cf4ee13d638606d93541964d71c"
+    },
+    {
+      "path": "bin/comerr64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 21504,
+      "sha256": "be8032a8cd1866eaf69cf7fadf7ca0ff468cc0b68a4ba8ecb376657671d6f3d0"
+    },
+    {
+      "path": "bin/concrt140.dll",
+      "role": "runtime_dll",
+      "size_bytes": 374352,
+      "sha256": "a5b9af428829ab7b61ceae9d88a37ce1053551379ee007d8df53a7ba4d33c251"
+    },
+    {
+      "path": "bin/deflate.dll",
+      "role": "runtime_dll",
+      "size_bytes": 177664,
+      "sha256": "0c8d7e40b4512d86969e2003a7d8bede601cfb9bc0a2d2472056a08a769769d5"
+    },
+    {
+      "path": "bin/ffi-8.dll",
+      "role": "runtime_dll",
+      "size_bytes": 27136,
+      "sha256": "21388a6f7825705dae4490ce706d03f70d9088f4086e683488b7b99e245b761f"
+    },
+    {
+      "path": "bin/fontconfig-1.dll",
+      "role": "runtime_dll",
+      "size_bytes": 328704,
+      "sha256": "9b9d24140abcd6aac1a252e11e07cd057b3abbfec3f6970907957fda7af76bd9"
+    },
+    {
+      "path": "bin/freetype.dll",
+      "role": "runtime_dll",
+      "size_bytes": 684032,
+      "sha256": "55bd6c66de863928f9678eb9daa189fbed75e037453b2d259e15e6af94d64a86"
+    },
+    {
+      "path": "bin/gio-2.0-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1612800,
+      "sha256": "06bb7f28ea75ac06aba8ad5ac182a014a641dfe8b0b2ed8811d4301e431152b4"
+    },
+    {
+      "path": "bin/girepository-2.0-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 138240,
+      "sha256": "724af02aea7e1c26c981ddd03d2fab46584b6b00b03bfa12a8423f4e11d686a4"
+    },
+    {
+      "path": "bin/glib-2.0-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1354240,
+      "sha256": "18f8023b4dd585a83d18f8c08915f40aa2afdd3b260b9389f183af18712c08e2"
+    },
+    {
+      "path": "bin/gmodule-2.0-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 19968,
+      "sha256": "53c96f0b56d3218c19dcf32b8ebba8f5f584713f292f945e708de49b475eaac1"
+    },
+    {
+      "path": "bin/gobject-2.0-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 319488,
+      "sha256": "eca56dc8e5f023e55cc133b1b1aa451ce1108ede3ac908141e6fbc70d1ff64c2"
+    },
+    {
+      "path": "bin/gssapi64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 397824,
+      "sha256": "5a2c5378f0ee1aa5e729658189d93033f9d2c582b4f55c0de4e05e470669f8b8"
+    },
+    {
+      "path": "bin/gthread-2.0-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 10752,
+      "sha256": "3ccddc61b8f68ebd778a151e48e4a19ad3c455112256c8e13a5b3be6f3baf833"
+    },
+    {
+      "path": "bin/iconv.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1086464,
+      "sha256": "772ed247d3d4a6d5625b737dfd1c1d238f74d1c48e560b2d551edfe734a34a1d"
+    },
+    {
+      "path": "bin/icudt.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1024,
+      "sha256": "8a8254075d9b92830a7a05f3e5c6e0e865ce7ef756795ae885fb156bae0574e3"
+    },
+    {
+      "path": "bin/icudt78.dll",
+      "role": "runtime_dll",
+      "size_bytes": 33110528,
+      "sha256": "63e5b8fbfb64f0550ecd1036822a95992315e3033fa02033e20efffbb3dfc63e"
+    },
+    {
+      "path": "bin/icuin.dll",
+      "role": "runtime_dll",
+      "size_bytes": 4221952,
+      "sha256": "776afcbdae71a58d6d4621af23804a52ced8666dbbfbe27507c70816683ae271"
+    },
+    {
+      "path": "bin/icuin78.dll",
+      "role": "runtime_dll",
+      "size_bytes": 4221952,
+      "sha256": "776afcbdae71a58d6d4621af23804a52ced8666dbbfbe27507c70816683ae271"
+    },
+    {
+      "path": "bin/icuio.dll",
+      "role": "runtime_dll",
+      "size_bytes": 272384,
+      "sha256": "a44c4540d870f49be948708742196e7dc65c8e4d718c1e1c1c5e9acbd0b81fba"
+    },
+    {
+      "path": "bin/icuio78.dll",
+      "role": "runtime_dll",
+      "size_bytes": 272384,
+      "sha256": "a44c4540d870f49be948708742196e7dc65c8e4d718c1e1c1c5e9acbd0b81fba"
+    },
+    {
+      "path": "bin/icutest.dll",
+      "role": "runtime_dll",
+      "size_bytes": 262144,
+      "sha256": "3019b09e5fafac6ee77118a64b2505f3e5c2cfeb2565408153739b5270cb7ee3"
+    },
+    {
+      "path": "bin/icutest78.dll",
+      "role": "runtime_dll",
+      "size_bytes": 262144,
+      "sha256": "3019b09e5fafac6ee77118a64b2505f3e5c2cfeb2565408153739b5270cb7ee3"
+    },
+    {
+      "path": "bin/icutu.dll",
+      "role": "runtime_dll",
+      "size_bytes": 581120,
+      "sha256": "37abb5816929c8f5d413a74baafd30484d1cb23e03a6f47909e05a5c1d59509d"
+    },
+    {
+      "path": "bin/icutu78.dll",
+      "role": "runtime_dll",
+      "size_bytes": 581120,
+      "sha256": "37abb5816929c8f5d413a74baafd30484d1cb23e03a6f47909e05a5c1d59509d"
+    },
+    {
+      "path": "bin/icuuc.dll",
+      "role": "runtime_dll",
+      "size_bytes": 2728448,
+      "sha256": "2882afacabd9d901762ab196c7a319b03051af39291e47fef51fcb69c26ab5b8"
+    },
+    {
+      "path": "bin/icuuc78.dll",
+      "role": "runtime_dll",
+      "size_bytes": 2728448,
+      "sha256": "2882afacabd9d901762ab196c7a319b03051af39291e47fef51fcb69c26ab5b8"
+    },
+    {
+      "path": "bin/intl-8.dll",
+      "role": "runtime_dll",
+      "size_bytes": 222720,
+      "sha256": "eeb01a2fa6b9744a1946f45bb55c1b45481b877472472bbce794829f96644336"
+    },
+    {
+      "path": "bin/jpeg8.dll",
+      "role": "runtime_dll",
+      "size_bytes": 694784,
+      "sha256": "1e5470bf7a7f8e439056d8d4ba7627daedef45f3c0410a8befa7b6290f4d5edf"
+    },
+    {
+      "path": "bin/k5sprt64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 165376,
+      "sha256": "07c2e9680517355b49b6da90699b4b851fb40d222ede5c0f0031d9deb78ac845"
+    },
+    {
+      "path": "bin/kfwlogon.dll",
+      "role": "runtime_dll",
+      "size_bytes": 36864,
+      "sha256": "25668e627569b35c0761369a8def1e808b15f189ebdcd39ca3ad18d8a1948281"
+    },
+    {
+      "path": "bin/krb5_64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1226240,
+      "sha256": "7d31079a4f83674537b0b1ff90f0bded83c75bde315a4d493c1f3da2515cff4d"
+    },
+    {
+      "path": "bin/krbcc64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 112640,
+      "sha256": "1c50a3029261cca4ac640cf3dcfc310533e7fef288ea5f17be15a20c3bc3efc5"
+    },
+    {
+      "path": "bin/lcms2.dll",
+      "role": "runtime_dll",
+      "size_bytes": 581632,
+      "sha256": "dce63402830aff3a57f363db82446f4cc7d71399d389820e40f3f37d52dec37a"
+    },
+    {
+      "path": "bin/leashw64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 152576,
+      "sha256": "1a2f336bcca633641a50139c8392dfe7792ecd8d20220a359831b11a5284ac94"
+    },
+    {
+      "path": "bin/Lerc.dll",
+      "role": "runtime_dll",
+      "size_bytes": 540672,
+      "sha256": "7844ff388c1fe684c95f176a9f256a55af4511c136e3b3340fd8050741ef5d3f"
+    },
+    {
+      "path": "bin/libbz2.dll",
+      "role": "runtime_dll",
+      "size_bytes": 77824,
+      "sha256": "894dbcd41ee025e020c9083f03e69f64a13c6a7fab36125b2bd29ddd803e4a72"
+    },
+    {
+      "path": "bin/libcrypto-3-x64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 7428608,
+      "sha256": "5bd5c85c2863c624e1e715f736fe1c20869b106c3bd341df671187839124f2be"
+    },
+    {
+      "path": "bin/libcurl.dll",
+      "role": "runtime_dll",
+      "size_bytes": 779264,
+      "sha256": "54b2d3be80abe67bfc79b887ba2078ffb8eb4b028b1c92b061faf40b7ba2dce2"
+    },
+    {
+      "path": "bin/libexpat.dll",
+      "role": "runtime_dll",
+      "size_bytes": 266752,
+      "sha256": "8f322ea819d3e90490d8931634e6b681ed10b8b86b2b6e4a762b600c7030f351"
+    },
+    {
+      "path": "bin/liblzma.dll",
+      "role": "runtime_dll",
+      "size_bytes": 188416,
+      "sha256": "64eb6567bead1a5b7386bd7acd1cdd9db8f9a03133eef7ae8208ae555738d680"
+    },
+    {
+      "path": "bin/libpng16.dll",
+      "role": "runtime_dll",
+      "size_bytes": 198656,
+      "sha256": "c3fc74e2bfa2d944cbea22e1db31f06247a54634f8f489f04b5ceec921118f3f"
+    },
+    {
+      "path": "bin/libssh2.dll",
+      "role": "runtime_dll",
+      "size_bytes": 258048,
+      "sha256": "1563642bed85fcb68fdcf3c8d2c23c742e95aa5dbb11234b2ba5d7a634775327"
+    },
+    {
+      "path": "bin/libssl-3-x64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1321984,
+      "sha256": "b4a534d770107439454bb33de3792cbe7c251f201d8ff88cf4dda6cbbe42c367"
+    },
+    {
+      "path": "bin/libtiff.dll",
+      "role": "runtime_dll",
+      "size_bytes": 504320,
+      "sha256": "cf68d6efb104af0c15281017169480d3d77d5ceab0f9716b8bba1638e962d8a4"
+    },
+    {
+      "path": "bin/libzstd.dll",
+      "role": "runtime_dll",
+      "size_bytes": 658432,
+      "sha256": "ca228f0f33b8296d6650b4694bb38ba9ea8796c523b6b5e0682fcc05a5edab0a"
+    },
+    {
+      "path": "bin/msvcp140.dll",
+      "role": "runtime_dll",
+      "size_bytes": 642720,
+      "sha256": "639342ea9a67c0009122238ce070a8257e2e04d367d627509fec29f8442afb42"
+    },
+    {
+      "path": "bin/msvcp140_1.dll",
+      "role": "runtime_dll",
+      "size_bytes": 35920,
+      "sha256": "456aebccb449fcba35f1109c259ba0aa10923e660f4de812a490d35f37f54fc9"
+    },
+    {
+      "path": "bin/msvcp140_2.dll",
+      "role": "runtime_dll",
+      "size_bytes": 274512,
+      "sha256": "7a403abf753d0bdf09776cf4bcb13b5a6ebe3a47670de124a3c621aa4b952f82"
+    },
+    {
+      "path": "bin/msvcp140_atomic_wait.dll",
+      "role": "runtime_dll",
+      "size_bytes": 57936,
+      "sha256": "d759dd381bdbd6142372de4cb57acc382e1b80c106b7414a408816564ee1eb6a"
+    },
+    {
+      "path": "bin/msvcp140_codecvt_ids.dll",
+      "role": "runtime_dll",
+      "size_bytes": 31312,
+      "sha256": "f781e1e0133c397c3a2c73fd4dbcdb442378ba20fced56a2f7db5822436ddd2a"
+    },
+    {
+      "path": "bin/openjp2.dll",
+      "role": "runtime_dll",
+      "size_bytes": 360448,
+      "sha256": "274e6a200cd564b014389546f6472d387717dece95b7d03db5f99195bd1d6e03"
+    },
+    {
+      "path": "bin/pcre2-16.dll",
+      "role": "runtime_dll",
+      "size_bytes": 565760,
+      "sha256": "e183cdaa5b5afb36cf8a3799bc7c35fc62a33178f3425a9c2012122fb6921e84"
+    },
+    {
+      "path": "bin/pcre2-32.dll",
+      "role": "runtime_dll",
+      "size_bytes": 547328,
+      "sha256": "f1b04811ae8dcf6bfd4cae6e8f64514c697266fed352182f4331f00013a112ec"
+    },
+    {
+      "path": "bin/pcre2-8.dll",
+      "role": "runtime_dll",
+      "size_bytes": 604672,
+      "sha256": "f3226e736a5fb27c2c7dfc792e812afc25fd686037dae225a4ed992427711c12"
+    },
+    {
+      "path": "bin/pcre2-posix.dll",
+      "role": "runtime_dll",
+      "size_bytes": 13824,
+      "sha256": "004bba3eab9c368a9a5741bd279e9e4c3f24fb6c053cf5b46489e1d76a74483b"
+    },
+    {
+      "path": "bin/pdfinfo.exe",
+      "role": "executable",
+      "size_bytes": 66048,
+      "sha256": "80983250720579d7b374703b5a177041ac397070389e7e67df3ff33ab3ca69db"
+    },
+    {
+      "path": "bin/pdftocairo.exe",
+      "role": "executable",
+      "size_bytes": 160256,
+      "sha256": "d4cea967d1d5063951e9a4077f05e061b74c896777db47950e733da949a943b4"
+    },
+    {
+      "path": "bin/pdftoppm.exe",
+      "role": "executable",
+      "size_bytes": 50176,
+      "sha256": "8a44c3c7939b624455667485dff9f15d36f09b100c34c70873d2dfb27c346fad"
+    },
+    {
+      "path": "bin/pixman-1-0.dll",
+      "role": "runtime_dll",
+      "size_bytes": 600064,
+      "sha256": "f6c9e7dd1f8913fd0869530a100786c31de253d0fe6af31687042403dacadced"
+    },
+    {
+      "path": "bin/poppler-cpp.dll",
+      "role": "runtime_dll",
+      "size_bytes": 178688,
+      "sha256": "b164c01b8c33080134a46199c5a07d6af00d551db5895d5848b35ec3675bb5b2"
+    },
+    {
+      "path": "bin/poppler-glib.dll",
+      "role": "runtime_dll",
+      "size_bytes": 457728,
+      "sha256": "ec0e9c7aaeef970ec870e64bf5ec6df6e3c9b8ee4ae382652cc346028f250fa2"
+    },
+    {
+      "path": "bin/poppler.dll",
+      "role": "runtime_dll",
+      "size_bytes": 6733312,
+      "sha256": "14aea32cf3c858de57a22a59ff315615f0f28d253675a24e26364b0431bd84e5"
+    },
+    {
+      "path": "bin/psl-5.dll",
+      "role": "runtime_dll",
+      "size_bytes": 77312,
+      "sha256": "a9bb90bb0d19182c9fb84e2e8c2660ecda431da4ffecb250af6150b515be8dc2"
+    },
+    {
+      "path": "bin/tiff.dll",
+      "role": "runtime_dll",
+      "size_bytes": 504320,
+      "sha256": "cf68d6efb104af0c15281017169480d3d77d5ceab0f9716b8bba1638e962d8a4"
+    },
+    {
+      "path": "bin/turbojpeg.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1165312,
+      "sha256": "be207434d7b62384dda7ad4e969da0cd7ab3728a58f2dca54089000f46e80a66"
+    },
+    {
+      "path": "bin/ucrtbase.dll",
+      "role": "runtime_dll",
+      "size_bytes": 1362264,
+      "sha256": "3239227d27667ba20d10a880751924e5719de0078f9fce232d149d383f7681f6"
+    },
+    {
+      "path": "bin/vcamp140.dll",
+      "role": "runtime_dll",
+      "size_bytes": 417360,
+      "sha256": "4c8272cc59704b1acf67a20fbbff1fad139ca39b331e1de9d207272feeb4236e"
+    },
+    {
+      "path": "bin/vccorlib140.dll",
+      "role": "runtime_dll",
+      "size_bytes": 350800,
+      "sha256": "9ce6f235791450717f8e05ecd729e95ec98e9630a9caae661ba6773b669ecbf7"
+    },
+    {
+      "path": "bin/vcomp140.dll",
+      "role": "runtime_dll",
+      "size_bytes": 213072,
+      "sha256": "f96f3a14d88d8846f31f3ab38a490304ce7d6e4f70fae4304c63e59c7aea2d30"
+    },
+    {
+      "path": "bin/vcruntime140.dll",
+      "role": "runtime_dll",
+      "size_bytes": 178848,
+      "sha256": "19c293ac482fdb882cd29d2b0e6d807419efdcada04068f03e5723670895e17d"
+    },
+    {
+      "path": "bin/vcruntime140_1.dll",
+      "role": "runtime_dll",
+      "size_bytes": 50256,
+      "sha256": "a253a12e4a8e9e23ebfe0ced829f7751e4f42c60066986bf20515ced8dcc68cd"
+    },
+    {
+      "path": "bin/vcruntime140_threads.dll",
+      "role": "runtime_dll",
+      "size_bytes": 38560,
+      "sha256": "cd05a48a1183b074e81275d6c6472ecb5b09db8a0db8d1850b009ad041907ce9"
+    },
+    {
+      "path": "bin/xpprof64.dll",
+      "role": "runtime_dll",
+      "size_bytes": 54784,
+      "sha256": "2ec6e54a2d721eee4dc49f853400a45787f645c292f9c9715c37e78fa96db29c"
+    },
+    {
+      "path": "bin/zlib.dll",
+      "role": "runtime_dll",
+      "size_bytes": 90624,
+      "sha256": "85c711c83f96bed93184bede15be6b5a3e5444df09dfffef00564107189dc722"
+    },
+    {
+      "path": "bin/zstd.dll",
+      "role": "runtime_dll",
+      "size_bytes": 658432,
+      "sha256": "ca228f0f33b8296d6650b4694bb38ba9ea8796c523b6b5e0682fcc05a5edab0a"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-hinting-slight.conf",
+      "role": "runtime_data",
+      "size_bytes": 620,
+      "sha256": "d138eca2bac3f78d45ff7cfb649ad792caa4a6e61f73cea7cf0ea54b091f1ef4"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-scale-bitmap-fonts.conf",
+      "role": "runtime_data",
+      "size_bytes": 2068,
+      "sha256": "df8e99abb6f82384c61978906a45a95794940545da95790d87f01d9391e0894b"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-sub-pixel-none.conf",
+      "role": "runtime_data",
+      "size_bytes": 647,
+      "sha256": "0f00b5cf0ce07062ec65b9b340aa888f6c5fbc215aafebd26781be2d5a13ff6a"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-yes-antialias.conf",
+      "role": "runtime_data",
+      "size_bytes": 258,
+      "sha256": "e6d82a642d1b37f7d24dc37f938b999f00ff7aa4303b2602d04164d53f221005"
+    },
+    {
+      "path": "etc/fonts/conf.d/11-lcdfilter-default.conf",
+      "role": "runtime_data",
+      "size_bytes": 695,
+      "sha256": "76aec9d8dac48faabe1bbde9e887cfb09fa45f30be5f8826e945a394a0097e48"
+    },
+    {
+      "path": "etc/fonts/conf.d/20-unhint-small-vera.conf",
+      "role": "runtime_data",
+      "size_bytes": 1377,
+      "sha256": "278732c68c16177f2aa3c7e4ea318b9f720aee13a433c32eb15ba626806c609d"
+    },
+    {
+      "path": "etc/fonts/conf.d/30-metric-aliases.conf",
+      "role": "runtime_data",
+      "size_bytes": 13610,
+      "sha256": "3baf25c82e1a14c606d45c212296852be06ae9795d60e84aab573226151450a2"
+    },
+    {
+      "path": "etc/fonts/conf.d/40-nonlatin.conf",
+      "role": "runtime_data",
+      "size_bytes": 7806,
+      "sha256": "eff416514c7578c152a437dcfc42170afe28e41c5247ac93a600d6dd9b47be32"
+    },
+    {
+      "path": "etc/fonts/conf.d/45-generic.conf",
+      "role": "runtime_data",
+      "size_bytes": 3490,
+      "sha256": "24de9f68189d544bb4cc084d9bd8f3a59d8b988a9dc44b11e9877d5add5fc948"
+    },
+    {
+      "path": "etc/fonts/conf.d/45-latin.conf",
+      "role": "runtime_data",
+      "size_bytes": 7258,
+      "sha256": "b46e539c25dfd5531c8fcf4f22c3d156b09272ffbc6f8a83a8eeb7431c09aee5"
+    },
+    {
+      "path": "etc/fonts/conf.d/48-guessfamily.conf",
+      "role": "runtime_data",
+      "size_bytes": 5908,
+      "sha256": "f6048ea7d8ed97cc4efef847b98c71ea9d20f16835feb43860b221d40770508e"
+    },
+    {
+      "path": "etc/fonts/conf.d/48-spacing.conf",
+      "role": "runtime_data",
+      "size_bytes": 441,
+      "sha256": "99d839cd8aa28854e8f54f26e7200b6e57951f39f56791a0ed473662488bcef6"
+    },
+    {
+      "path": "etc/fonts/conf.d/49-sansserif.conf",
+      "role": "runtime_data",
+      "size_bytes": 1701,
+      "sha256": "35b1d7dac8bb9f61a19f5a9f5e16fc6ddff1d0844ac04503a85a54b232a35c67"
+    },
+    {
+      "path": "etc/fonts/conf.d/50-user.conf",
+      "role": "runtime_data",
+      "size_bytes": 542,
+      "sha256": "bc6e31684e4f5e0176200e558a250ff63e9ab0773300f47071223edc320c4c5e"
+    },
+    {
+      "path": "etc/fonts/conf.d/51-local.conf",
+      "role": "runtime_data",
+      "size_bytes": 263,
+      "sha256": "dca9d917e1f66f73bfa495943b4d1eaab2d93810a51bc8e600cf4d4e9df03e67"
+    },
+    {
+      "path": "etc/fonts/conf.d/60-generic.conf",
+      "role": "runtime_data",
+      "size_bytes": 1911,
+      "sha256": "195bc8605dd23289d42c10d79cc13a5ce4a4b3cf965df5b30ecc0b7149bb951f"
+    },
+    {
+      "path": "etc/fonts/conf.d/60-latin.conf",
+      "role": "runtime_data",
+      "size_bytes": 2169,
+      "sha256": "5c2c410bc584ba16a5e2ca5830311b0efaba9bdba3261d3247e880f6ea9d5220"
+    },
+    {
+      "path": "etc/fonts/conf.d/65-fonts-persian.conf",
+      "role": "runtime_data",
+      "size_bytes": 10132,
+      "sha256": "c675fab143a3638346874798be45f51f6878ebec591b4362d83cfffb828ec4ca"
+    },
+    {
+      "path": "etc/fonts/conf.d/65-nonlatin.conf",
+      "role": "runtime_data",
+      "size_bytes": 9815,
+      "sha256": "2a0232e5423f38023efb29b67a95bae982da3c474ec5ec7bbf5b418f42357a50"
+    },
+    {
+      "path": "etc/fonts/conf.d/69-unifont.conf",
+      "role": "runtime_data",
+      "size_bytes": 687,
+      "sha256": "fa97c0cf5f79d70e2dc3dc48155d4c9220cd7c6a8bc95b89c4ebcc517f97479e"
+    },
+    {
+      "path": "etc/fonts/conf.d/70-no-bitmaps-except-emoji.conf",
+      "role": "runtime_data",
+      "size_bytes": 429,
+      "sha256": "bb5df65896bf3011b2f2935b63ab12db1ecf078674ff73a533123445f122a92b"
+    },
+    {
+      "path": "etc/fonts/conf.d/80-delicious.conf",
+      "role": "runtime_data",
+      "size_bytes": 437,
+      "sha256": "34f27b7fe9cd83b2b6d46f16ef9c477412f2d7ef63634f86b9b38b79bc4f81ad"
+    },
+    {
+      "path": "etc/fonts/conf.d/90-synthetic.conf",
+      "role": "runtime_data",
+      "size_bytes": 1757,
+      "sha256": "cdd0aac7840c664a7127b64db66bdfe8dc22be3774d10bc22f4a41c98de5d85e"
+    },
+    {
+      "path": "etc/fonts/conf.d/README",
+      "role": "runtime_data",
+      "size_bytes": 1005,
+      "sha256": "3f79cb048a5bfec977732c5f8e3566515b979cfea17a333465281c0551bb92d6"
+    },
+    {
+      "path": "etc/fonts/fonts.conf",
+      "role": "runtime_data",
+      "size_bytes": 2703,
+      "sha256": "f141c1b89b172d22f213531646c21e288f0ebf3ec46484698896e1b33c626756"
+    },
+    {
+      "path": "licenses/bzip2/LICENSE",
+      "role": "license",
+      "size_bytes": 1896,
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3"
+    },
+    {
+      "path": "licenses/ca-certificates/LICENSE",
+      "role": "license",
+      "size_bytes": 989,
+      "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+    },
+    {
+      "path": "licenses/cairo/COPYING",
+      "role": "license",
+      "size_bytes": 1576,
+      "sha256": "67228a9f7c5f9b67c58f556f1be178f62da4d9e2e6285318d8c74d567255abdf"
+    },
+    {
+      "path": "licenses/cairo/COPYING-LGPL-2.1",
+      "role": "license",
+      "size_bytes": 26533,
+      "sha256": "9e9e8608c4cdda51a78cc3a385f4ec9a2e4c96d5ecad74ac8bca5fca3e563b7d"
+    },
+    {
+      "path": "licenses/cairo/COPYING-MPL-1.1",
+      "role": "license",
+      "size_bytes": 25755,
+      "sha256": "53692a2ed6c6a2c6ec9b32dd0b820dfae91e0a1fcdf625ca9ed0bdf8705fcc4f"
+    },
+    {
+      "path": "licenses/font-ttf-dejavu-sans-mono/LICENSE",
+      "role": "license",
+      "size_bytes": 8816,
+      "sha256": "7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93"
+    },
+    {
+      "path": "licenses/font-ttf-inconsolata/OFL.txt",
+      "role": "license",
+      "size_bytes": 4394,
+      "sha256": "5d362a6f8690517fd9a5573128a081d8bbbb2f92714cf00556e08fbbe9600426"
+    },
+    {
+      "path": "licenses/font-ttf-source-code-pro/LICENSE.md",
+      "role": "license",
+      "size_bytes": 4578,
+      "sha256": "1036668c56392d012c81aa1c84cd8aacea3e767c52190f789d14857b3d0a5765"
+    },
+    {
+      "path": "licenses/font-ttf-ubuntu/LICENCE.txt",
+      "role": "license",
+      "size_bytes": 4673,
+      "sha256": "2f0015108d68627bd788d313f529c21ff4da2c2c42a5e1f3883acc83480f9002"
+    },
+    {
+      "path": "licenses/fontconfig/COPYING",
+      "role": "license",
+      "size_bytes": 8616,
+      "sha256": "51a51aa9823704fd90bccc616cdd17ebabb5b2b3e9cbde886ca02c7002288067"
+    },
+    {
+      "path": "licenses/fonts-conda-ecosystem/LICENSE.txt",
+      "role": "license",
+      "size_bytes": 1488,
+      "sha256": "e7e41b9bdcc1e5a3b3f897a084ae48ac2a1a50172edf1a9a29ad482e0c5e8341"
+    },
+    {
+      "path": "licenses/fonts-conda-forge/LICENSE.txt",
+      "role": "license",
+      "size_bytes": 1488,
+      "sha256": "e7e41b9bdcc1e5a3b3f897a084ae48ac2a1a50172edf1a9a29ad482e0c5e8341"
+    },
+    {
+      "path": "licenses/icu/LICENSE",
+      "role": "license",
+      "size_bytes": 27718,
+      "sha256": "e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af"
+    },
+    {
+      "path": "licenses/krb5/doc/notice.rst",
+      "role": "license",
+      "size_bytes": 62479,
+      "sha256": "35a540e57bd0c22f1a5c8262dac9f80b1b440ce249db8d2d02604c800149b52e"
+    },
+    {
+      "path": "licenses/lcms2/LICENSE",
+      "role": "license",
+      "size_bytes": 1080,
+      "sha256": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31"
+    },
+    {
+      "path": "licenses/lerc/LICENSE",
+      "role": "license",
+      "size_bytes": 9198,
+      "sha256": "77a8b761727c75e2167b15bfdf61b2c0bcf8792271228bebe80779106ad00671"
+    },
+    {
+      "path": "licenses/libcurl/COPYING",
+      "role": "license",
+      "size_bytes": 1088,
+      "sha256": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
+    },
+    {
+      "path": "licenses/libdeflate/COPYING",
+      "role": "license",
+      "size_bytes": 1078,
+      "sha256": "4ad69099cb4374836fd27583d9991e2838cd86b6e4666ab26b2d32582c91e73a"
+    },
+    {
+      "path": "licenses/libexpat/COPYING",
+      "role": "license",
+      "size_bytes": 1144,
+      "sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87"
+    },
+    {
+      "path": "licenses/libffi/LICENSE",
+      "role": "license",
+      "size_bytes": 1132,
+      "sha256": "d5699fa516968e3a1550e6c902b7441c78856f2603d61bedd0b0662a26655366"
+    },
+    {
+      "path": "licenses/libglib/LICENSES/LGPL-2.1-or-later.txt",
+      "role": "license",
+      "size_bytes": 25967,
+      "sha256": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+    },
+    {
+      "path": "licenses/libiconv/COPYING.LIB",
+      "role": "license",
+      "size_bytes": 26419,
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+    },
+    {
+      "path": "licenses/libintl/COPYING",
+      "role": "license",
+      "size_bytes": 35151,
+      "sha256": "e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b"
+    },
+    {
+      "path": "licenses/libjpeg-turbo/LICENSE.md",
+      "role": "license",
+      "size_bytes": 6077,
+      "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+    },
+    {
+      "path": "licenses/liblzma/COPYING",
+      "role": "license",
+      "size_bytes": 3119,
+      "sha256": "616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8"
+    },
+    {
+      "path": "licenses/liblzma/COPYING.0BSD",
+      "role": "license",
+      "size_bytes": 607,
+      "sha256": "0b01625d853911cd0e2e088dcfb743261034a091bb379246cb25a14cc4c74bf1"
+    },
+    {
+      "path": "licenses/libpng/LICENSE",
+      "role": "license",
+      "size_bytes": 5345,
+      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+    },
+    {
+      "path": "licenses/libpsl/LICENSE",
+      "role": "license",
+      "size_bytes": 1060,
+      "sha256": "322392e6001b2b3b0fca705dc9f11f26e12441188ecde50eb1d22909980b2925"
+    },
+    {
+      "path": "licenses/libssh2/COPYING",
+      "role": "license",
+      "size_bytes": 1959,
+      "sha256": "f7f9633cf9ff2f1333f3d7ce46973a8716a4d2a2815ad56f30d437d5fea7bafe"
+    },
+    {
+      "path": "licenses/libtiff/LICENSE.md",
+      "role": "license",
+      "size_bytes": 2416,
+      "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade"
+    },
+    {
+      "path": "licenses/libzlib/LICENSE",
+      "role": "license",
+      "size_bytes": 1002,
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    {
+      "path": "licenses/openjpeg/LICENSE",
+      "role": "license",
+      "size_bytes": 2112,
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    {
+      "path": "licenses/openssl/LICENSE.txt",
+      "role": "license",
+      "size_bytes": 10175,
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    },
+    {
+      "path": "licenses/pcre2/COPYING",
+      "role": "license",
+      "size_bytes": 97,
+      "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507"
+    },
+    {
+      "path": "licenses/pixman/COPYING",
+      "role": "license",
+      "size_bytes": 2087,
+      "sha256": "fac9270f0987b96ff4533fca3548c633e02083cbba4a0172a3b149b2e4019793"
+    },
+    {
+      "path": "licenses/poppler/COPYING",
+      "role": "license",
+      "size_bytes": 17987,
+      "sha256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+    },
+    {
+      "path": "licenses/poppler-data/COPYING",
+      "role": "license",
+      "size_bytes": 1560,
+      "sha256": "36f27791549113cecd00013233101026452c872f79215a93d33a4a9bd0678672"
+    },
+    {
+      "path": "licenses/poppler-data/COPYING.adobe",
+      "role": "license",
+      "size_bytes": 1565,
+      "sha256": "4d367131f33e9f0daa6acf84ccc20e6468aa379bc053f5fa72dab201ec017b39"
+    },
+    {
+      "path": "licenses/poppler-data/COPYING.gpl2",
+      "role": "license",
+      "size_bytes": 17987,
+      "sha256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+    },
+    {
+      "path": "licenses/poppler-data/licenses/COPYING.gpl3",
+      "role": "license",
+      "size_bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "path": "licenses/ucrt/LICENSE.txt",
+      "role": "license",
+      "size_bytes": 29410,
+      "sha256": "f4589c739597890dd40bccb6bf20632a99c228bdd20cfbf585b5b30c9e61b3fb"
+    },
+    {
+      "path": "licenses/vc14_runtime/LICENSE.RTF",
+      "role": "license",
+      "size_bytes": 9235,
+      "sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b"
+    },
+    {
+      "path": "licenses/vc14_runtime/LICENSE.TXT",
+      "role": "license",
+      "size_bytes": 7590,
+      "sha256": "cf89b37107c22cf8ce21043da1da143087b86ce7fd4556f91c25bc429533807e"
+    },
+    {
+      "path": "licenses/vcomp14/LICENSE.RTF",
+      "role": "license",
+      "size_bytes": 9235,
+      "sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b"
+    },
+    {
+      "path": "licenses/vcomp14/LICENSE.TXT",
+      "role": "license",
+      "size_bytes": 7590,
+      "sha256": "cf89b37107c22cf8ce21043da1da143087b86ce7fd4556f91c25bc429533807e"
+    },
+    {
+      "path": "licenses/zstd/LICENSE",
+      "role": "license",
+      "size_bytes": 1549,
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+    }
+  ]
+}

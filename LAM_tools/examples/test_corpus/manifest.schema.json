@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/lam/test-corpus-manifest.schema.json",
+  "title": "LAM public test corpus manifest",
+  "type": "object",
+  "required": ["schema_version", "cases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id", "filename", "source_type", "purpose", "doi", "pmid",
+          "arxiv_id", "download_url", "sha256", "redistribution",
+          "expected_behavior", "notes"
+        ],
+        "properties": {
+          "case_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]+$"},
+          "filename": {"type": "string", "minLength": 1},
+          "source_type": {"enum": ["synthetic_pdf", "reference_text", "external_pdf"]},
+          "purpose": {"type": "string", "minLength": 1},
+          "doi": {"type": "string"},
+          "pmid": {"type": "string"},
+          "arxiv_id": {"type": "string"},
+          "download_url": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+          "redistribution": {"enum": ["included", "download_only"]},
+          "expected_behavior": {"type": "object"},
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

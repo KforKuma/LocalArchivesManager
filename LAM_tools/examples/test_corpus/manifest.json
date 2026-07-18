@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "pdf_native_text",
+      "filename": "native_text.pdf",
+      "source_type": "synthetic_pdf",
+      "purpose": "Exercise native PDF text and clean metadata extraction without OCR.",
+      "doi": "",
+      "pmid": "",
+      "arxiv_id": "",
+      "download_url": "",
+      "sha256": "5b7532d2369fc379edbcf113a8a943ac4c322cda1950ad27fc9729dee7609c1f",
+      "redistribution": "included",
+      "expected_behavior": {
+        "text_layer": true,
+        "visual_type": "native_text_pdf",
+        "ocr_required": false,
+        "title_contains": "Synthetic Signals"
+      },
+      "notes": "Generated entirely by scripts/generate_test_corpus.py."
+    },
+    {
+      "case_id": "pdf_image_only",
+      "filename": "image_only.pdf",
+      "source_type": "synthetic_pdf",
+      "purpose": "Exercise image-only detection and OCR candidate routing.",
+      "doi": "",
+      "pmid": "",
+      "arxiv_id": "",
+      "download_url": "",
+      "sha256": "632eba3da707c90fde5c71615d9c31626e838e800825a3465047493a08fe64ad",
+      "redistribution": "included",
+      "expected_behavior": {
+        "text_layer": false,
+        "visual_type": "scanned_article_pdf",
+        "ocr_candidate": true,
+        "title_visible_in_raster": true
+      },
+      "notes": "One project-generated article-like raster fills the PDF page."
+    },
+    {
+      "case_id": "pdf_screenshot_wrapped",
+      "filename": "screenshot_wrapped.pdf",
+      "source_type": "synthetic_pdf",
+      "purpose": "Exercise screenshot-wrapped classification and rejection of browser chrome as article metadata.",
+      "doi": "",
+      "pmid": "",
+      "arxiv_id": "",
+      "download_url": "",
+      "sha256": "8aefdbdc1f3e0abf2717f0fbfc2f71c6706fab79f16620bf910238043fd031cd",
+      "redistribution": "included",
+      "expected_behavior": {
+        "text_layer": false,
+        "visual_type": "screenshot_wrapped",
+        "ocr_candidate": true,
+        "browser_url_not_title": true
+      },
+      "notes": "Synthetic browser controls and an example.invalid URL surround the raster article."
+    },
+    {
+      "case_id": "pdf_contaminated_metadata",
+      "filename": "contaminated_metadata.pdf",
+      "source_type": "synthetic_pdf",
+      "purpose": "Exercise rejection of navigation-like PDF metadata while retaining usable native page text.",
+      "doi": "",
+      "pmid": "",
+      "arxiv_id": "",
+      "download_url": "",
+      "sha256": "6973ab44df3729c87cbc84137f2f87bc2c2e8b8fd5ecb00f31c3e9e94e631601",
+      "redistribution": "included",
+      "expected_behavior": {
+        "text_layer": true,
+        "metadata_title_rejected": true,
+        "page_title_usable": true,
+        "forbidden_title_fragment": "Download PDF"
+      },
+      "notes": "The page matches native_text.pdf; only metadata contains synthetic contamination."
+    },
+    {
+      "case_id": "reference_refs1",
+      "filename": "refs1.txt",
+      "source_type": "reference_text",
+      "purpose": "Exercise numbered bibliography segmentation and six DOI candidates with copied-text punctuation noise.",
+      "doi": "",
+      "pmid": "",
+      "arxiv_id": "",
+      "download_url": "",
+      "sha256": "cff386b68b442da37c144d62894f963fff9420a3d5b2ba1eaac522dcbbe07975",
+      "redistribution": "included",
+      "expected_behavior": {
+        "reference_text_mode": "only",
+        "candidate_count": 6,
+        "doi_candidate_count": 6,
+        "documents_created": 0
+      },
+      "notes": "Public UTF-8/LF test copy of Inbox/refs1.txt; citation text only."
+    },
+    {
+      "case_id": "reference_refs2",
+      "filename": "refs2.txt",
+      "source_type": "reference_text",
+      "purpose": "Regression corpus for explicit title-only reference registration from one-title-per-line text.",
+      "doi": "",
+      "pmid": "",
+      "arxiv_id": "",
+      "download_url": "",
+      "sha256": "b0a9248cb5fa3fe2a2199e672165ad728277a5e2aa14757adeb2fc6114f1727d",
+      "redistribution": "included",
+      "expected_behavior": {
+        "reference_text_mode": "only",
+        "target_candidate_count": 6,
+        "requires_accept_title_only": true,
+        "documents_created": 0,
+        "current_060_observation": "single_unconfirmed_group"
+      },
+      "notes": "Public UTF-8/LF test copy of Inbox/refs2.txt; intended for the 0.6.1 title-only milestone."
+    }
+  ]
+}

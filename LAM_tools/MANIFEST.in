@@ -1,0 +1,23 @@
+include README.md LICENSE THIRD_PARTY_NOTICES.md pyproject.toml environment.yml .env.example
+recursive-include docs *.md
+include examples/test_corpus/README.md
+include examples/test_corpus/manifest.json
+include examples/test_corpus/manifest.schema.json
+recursive-include examples/test_corpus/included *.pdf
+recursive-include examples/test_corpus/reference_text *.txt
+recursive-include examples/test_corpus/expected *.md
+recursive-include packaging *.md *.spec *.json *.bat
+recursive-include scripts *.py *.ps1
+recursive-include src *.py *.md
+recursive-include tests *.py *.md *.txt
+prune .build
+prune dist
+prune tmp
+prune dev_local
+prune reports_local
+prune release_staging
+prune tests/local
+prune examples/test_corpus/downloaded
+prune packaging/assets/easyocr-models
+prune packaging/vendor
+global-exclude .env __pycache__ *.py[cod] *.log *.tmp *.part summary.md
