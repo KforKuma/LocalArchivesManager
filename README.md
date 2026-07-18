@@ -1,9 +1,9 @@
 # LAM — Local Archives Manager
 
 LAM is a deterministic local manager for a research literature library.
-Version 0.5.9 standardizes manifested production temporary workspaces and test
-isolation, and adds conservative reference-text registration with optional
-verified open-access PDF download.
+Version 0.6.0 starts the stable public-source release line, separates source
+code from user library data, and preserves the 0.5.9 temporary-workspace and
+reference-text safety contracts.
 It never reads or modifies `summary.md`.
 
 ```text
@@ -172,7 +172,7 @@ Workflow 3 progressively uses filename/PDF metadata, bounded pypdf text and a
 title or identifier lookup before OCR. Native PDF and EasyOCR implementations
 now conform to one document-analysis request/result protocol; future layout or
 vision backends can be added without changing Workflow 3. No new large model is
-installed by 0.5.9.
+installed in the current release line.
 
 All local candidates are classified as `trusted`, `usable`, `weak`, or
 `rejected`. Viewer/publisher navigation, contaminated PDF metadata, truncated
@@ -255,7 +255,7 @@ CROSSREF_ENABLED=true
 CROSSREF_EMAIL=you@example.org
 CROSSREF_MIN_INTERVAL_SECONDS=1.0
 CROSSREF_MAX_RESULTS=10
-HTTP_USER_AGENT=LAM/0.5.9
+HTTP_USER_AGENT=LAM/0.6.0
 LAM_KEEP_FAILED_TEMP=false
 LAM_TEMP_RETENTION_HOURS=24
 OCR_ENABLED=true
@@ -309,6 +309,6 @@ excluded unless explicitly selected.
 
 The command registry/help, JSON envelope, statuses/exit codes,
 Catalogue/Documents schema, `.env.example`, Workflow 1–4 rules, `lam init`
-layout and reference-text import behavior are public 0.5.9 contracts. Provider
+layout and reference-text import behavior are public 0.6.0 contracts. Provider
 classes, cache formats, OCR images, temporary layout details, test helpers and
 private debug reports remain internal.

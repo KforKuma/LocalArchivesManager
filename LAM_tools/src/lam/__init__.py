@@ -1,3 +1,5 @@
 """Local Archives Manager."""
 
-__version__ = "0.5.9"
+from .versions import PACKAGE_VERSION
+
+__version__ = PACKAGE_VERSION

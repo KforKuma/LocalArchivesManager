@@ -10,6 +10,7 @@ from lam.cli import CliParserError, build_parser, main
 from lam.command_registry import COMMANDS, command_markdown_table
 from lam.models import WorkflowResult
 from lam.services.invocation_service import InvocationService
+from lam.versions import JSON_SCHEMA_VERSION, LIBRARY_SCHEMA_VERSION, PACKAGE_VERSION
 
 
 ENVELOPE_FIELDS = {
@@ -117,6 +118,13 @@ def test_cli_version_uses_package_version(capsys):
         build_parser().parse_args(["--version"])
     assert exit_info.value.code == 0
     assert capsys.readouterr().out.strip() == __version__
+    assert __version__ == PACKAGE_VERSION == "0.6.0"
+
+
+def test_version_contracts_are_independent_constants():
+    assert PACKAGE_VERSION == "0.6.0"
+    assert LIBRARY_SCHEMA_VERSION == "0.5.2"
+    assert JSON_SCHEMA_VERSION == "1"
 
 
 def test_parser_json_error_uses_exit_10_and_stable_envelope(

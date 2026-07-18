@@ -6,6 +6,10 @@ from pathlib import Path
 
 from .exceptions import ConfigurationError
 from .directory_policy import parse_reserved_root_directories
+from .versions import PACKAGE_VERSION
+
+
+DEFAULT_USER_AGENT = f"LAM/{PACKAGE_VERSION}"
 
 
 def _load_optional_dotenv(project_root: Path) -> None:
@@ -46,7 +50,7 @@ class NetworkConfig:
     read_timeout_seconds: float = 30.0
     max_retries: int = 3
     max_response_bytes: int = 10 * 1024 * 1024
-    user_agent: str = "LAM/0.5.9"
+    user_agent: str = DEFAULT_USER_AGENT
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,13 +205,22 @@ class Settings:
             raise ConfigurationError(
                 "LAM_TESTING requires an explicit isolated library root; implicit .env/LIBRARY_ROOT resolution is disabled"
             )
-        selected = root or os.getenv("LIBRARY_ROOT") or project_root.parent
+        selected = root or os.getenv("LIBRARY_ROOT")
+        if selected is None or not str(selected).strip():
+            raise ConfigurationError(
+                "Library root is not configured; pass --root or set LIBRARY_ROOT"
+            )
         library_root = Path(selected).expanduser().resolve()
         if testing and not allow_real_tests:
-            real_root = Path(
-                os.getenv("LAM_REAL_LIBRARY_ROOT", str(project_root.parent))
-            ).expanduser().resolve()
-            if library_root == real_root or real_root in library_root.parents:
+            real_root_value = os.getenv("LAM_REAL_LIBRARY_ROOT", "").strip()
+            real_root = (
+                Path(real_root_value).expanduser().resolve()
+                if real_root_value
+                else None
+            )
+            if real_root is not None and (
+                library_root == real_root or real_root in library_root.parents
+            ):
                 raise ConfigurationError(
                     f"Tests may not use the real library root: {library_root}"
                 )
@@ -226,7 +239,8 @@ class Settings:
             read_timeout_seconds=_env_float("HTTP_READ_TIMEOUT_SECONDS", 30.0),
             max_retries=_env_int("HTTP_MAX_RETRIES", 3),
             max_response_bytes=_env_int("HTTP_MAX_RESPONSE_BYTES", 10 * 1024 * 1024),
-            user_agent=os.getenv("HTTP_USER_AGENT", "LAM/0.5.9").strip() or "LAM/0.5.9",
+            user_agent=os.getenv("HTTP_USER_AGENT", DEFAULT_USER_AGENT).strip()
+            or DEFAULT_USER_AGENT,
         )
         if network.max_retries < 0 or network.max_response_bytes <= 0:
             raise ConfigurationError("HTTP retry and response-size settings are invalid")

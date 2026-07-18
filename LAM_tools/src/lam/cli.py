@@ -34,6 +34,7 @@ from .exceptions import (
 )
 from .models import MetadataLookupRequest, WorkflowResult, WorkflowStatus
 from .run_context import RunContext, activate_run_context
+from .versions import JSON_SCHEMA_VERSION
 from .services.catalogue_preflight_service import CataloguePreflightService
 from .services.invocation_service import InvocationService
 from .workflows.catalogue_filing import CatalogueFilingWorkflow
@@ -61,7 +62,6 @@ EXIT_CODES = {
     WorkflowStatus.FAILED: 30,
 }
 CALLERS = ("user", "agent", "internal_workflow", "scheduled", "unknown")
-JSON_SCHEMA_VERSION = "1"
 PUBLIC_COMMAND_METAVAR = (
     "{init,check,register,search,file,export,review,status,recover,migrate,cleanup,doctor,commands}"
 )
@@ -703,7 +703,9 @@ def _raw_canonical(command: str, raw: list[str]) -> str:
 def _minimal_context(command: str, root: Path | None, caller: str, dry_run: bool) -> RunContext | None:
     if not command:
         return None
-    selected = root or Path(__file__).resolve().parents[3]
+    if root is None:
+        return None
+    selected = root
     try:
         resolved = selected.expanduser().resolve()
     except OSError:

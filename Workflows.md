@@ -597,8 +597,8 @@ backends are `NativePdfBackend` and `EasyOcrRegionBackend`.
 sufficient and EasyOCR regions for scanned or screenshot-wrapped content.
 `DOCUMENT_ANALYSIS_FALLBACKS=native,easyocr` reserves an ordered extension point;
 uninstalled Docling, GROBID, layout-aware, or advanced-vision backends are not
-called implicitly and return an explainable unavailable result. Version 0.5.9
-adds no new large model dependency.
+called implicitly and return an explainable unavailable result. Version 0.6.0
+keeps the installed backend set unchanged and adds no new large model family.
 
 Workflow 3 continues to prefer PDF metadata and bounded `pypdf` text. A usable
 title or identifier is submitted to Workflow 2 before deeper OCR. A confirmed
